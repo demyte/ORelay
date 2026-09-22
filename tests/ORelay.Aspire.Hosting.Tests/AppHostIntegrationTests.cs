@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Win32.SafeHandles;
@@ -37,6 +38,28 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
         var two = await browserTwo.GetFromJsonAsync<SampleSession>("/sample/session", ct);
         Assert.NotEqual(one!.RegistrationId, two!.RegistrationId);
         await Task.WhenAll(CompleteFlowAsync(browserOne, ct), CompleteFlowAsync(browserTwo, ct));
+
+        // Keep the browser's legitimate flow cookie while corrupting only the opaque state suffix.
+        var flowCookies = new CookieContainer();
+        using var manualFlow = new HttpClient(new HttpClientHandler { CookieContainer = flowCookies, AllowAutoRedirect = false }) { BaseAddress = browserOne.BaseAddress };
+        using var flowBrowser = new HttpClient(new HttpClientHandler { CookieContainer = flowCookies }) { BaseAddress = browserOne.BaseAddress };
+        using var begin = await manualFlow.GetAsync("/login", ct);
+        var providerAuthorization = begin.Headers.Location!;
+        var legitimateState = QueryHelpers.ParseQuery(providerAuthorization.Query)["state"].ToString();
+        var tamperedCallback = QueryHelpers.AddQueryString(new Uri(new Uri(server), "/callback").AbsoluteUri,
+            new Dictionary<string, string?> { ["state"] = one.RegistrationId + ".tampered-opaque-state", ["code"] = "synthetic-unused" });
+        Assert.StartsWith(one.RegistrationId + ".", legitimateState, StringComparison.Ordinal);
+        using var rejected = await flowBrowser.GetAsync(tamperedCallback, ct);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Equal("/oauth/callback", rejected.RequestMessage!.RequestUri!.AbsolutePath);
+        var rejection = await rejected.Content.ReadFromJsonAsync<Dictionary<string, string>>(ct);
+        Assert.Equal("invalid_state", rejection!["error"]);
+        using var legitimate = await flowBrowser.GetAsync(providerAuthorization, ct);
+        Assert.Equal(HttpStatusCode.OK, legitimate.StatusCode);
+        var validated = await legitimate.Content.ReadFromJsonAsync<FlowResult>(ct);
+        Assert.True(validated!.StateValidated);
+        Assert.True(validated.DirectCodeExchange);
+        output.WriteLine("Relay forwarded a valid registration with tampered opaque state; the worktree rejected it with 400 invalid_state. The original cookie-bound flow then completed successfully.");
 
         if (OperatingSystem.IsWindows())
         {
