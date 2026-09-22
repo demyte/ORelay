@@ -2,7 +2,9 @@
 [Bb]in/
 [Oo]bj/
 TestResults/
+artifacts/
 .artifacts/verification/
+.artifacts/packages/
 work/verification/
 
 # Visual Studio and local IDE state

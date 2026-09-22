@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <RepositoryRoot>$(MSBuildThisFileDirectory)</RepositoryRoot>
+  </PropertyGroup>
+
+  <Target Name="CheckFormatting">
+    <Exec Command="dotnet format &quot;$(RepositoryRoot)ORelay.sln&quot; --verify-no-changes --no-restore" />
+  </Target>
+</Project>

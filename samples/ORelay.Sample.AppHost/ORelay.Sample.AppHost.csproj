@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.5.2" />
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsAspireHost>true</IsAspireHost><AspireUseCliBundle>true</AspireUseCliBundle>
+    <IsPackable>false</IsPackable>
+    <ORelayPackageVersion Condition="'$(ORelayPackageVersion)' == ''">0.1.0</ORelayPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <ProjectReference Include="../../src/ORelay.Aspire.Hosting/ORelay.Aspire.Hosting.csproj" IsAspireProjectResource="false" Condition="'$(UseORelayPackage)' != 'true'" />
+    <PackageReference Include="ORelay.Aspire.Hosting" VersionOverride="$(ORelayPackageVersion)" Condition="'$(UseORelayPackage)' == 'true'" />
+    <ProjectReference Include="../ORelay.Sample.Api/ORelay.Sample.Api.csproj" />
+    <ProjectReference Include="../ORelay.Sample.Provider/ORelay.Sample.Provider.csproj" />
+  </ItemGroup>
+</Project>

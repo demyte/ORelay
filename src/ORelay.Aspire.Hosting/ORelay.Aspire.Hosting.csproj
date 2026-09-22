@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>ORelay.Aspire.Hosting</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Aspire registration lifecycle for an independently running ORelay server.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../ORelay/Discovery/CallbackDiscovery.cs" Link="Discovery/CallbackDiscovery.cs" />
+    <Compile Include="../ORelay/Discovery/TailscaleStatusProcessProvider.cs" Link="Discovery/TailscaleStatusProcessProvider.cs" />
+    <PackageReference Include="Aspire.Hosting" />
+    <InternalsVisibleTo Include="ORelay.Aspire.Hosting.Tests" />
+    <None Include="PACKAGE.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

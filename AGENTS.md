@@ -10,7 +10,7 @@ Keep proposed behavior marked as planned until implementation and verification e
 
 Keep documentation separated by audience. `README.md` is for people learning about, installing, using, or contributing to ORelay. `AGENTS.md` contains only the instructions, constraints, and workflow references an agent needs to work in this repository. Keep verification-skill procedures and agent evidence rules out of the README; detailed verification recipes belong in the verification skill itself.
 
-When implementation begins:
+When changing the implementation:
 
 - Keep callback routing opaque. Preserve the complete callback query for the registered worktree, including state, code, error fields, and other provider values.
 - Protect callback query strings, authorization codes, access tokens, refresh tokens, and secrets from logs, diagnostics, exceptions, and test output.
@@ -33,7 +33,13 @@ An agent must be able to make a change, run focused feedback commands, and prove
 
 James authorized implementation of all v1 tickets with parallel subagents and reviewed incremental commits to main. The orchestrator owns integration, final verification, and commits; subagents own bounded file areas and do not stage, commit, or push. Tests must check meaningful external behavior and failure paths, not repeat the implementation.
 
-Do not select a license, publish packages, or create external service configuration without an explicit request.
+## Working commands
+
+Run `pwsh -NoProfile -File scripts/build.ps1`, `scripts/format.ps1`, and `scripts/test.ps1` from the checkout. The test script builds by default. Use `dotnet test <test-project> --filter <expression>` for focused feedback. Publish on a matching native host with `scripts/publish.ps1 -RuntimeIdentifier <rid>`.
+
+Read `.agents/skills/verify-orelay/SKILL.md` for real CLI/HTTP verification and its feature map. Aspire integration tests use a run-owned relay and the sample commands in `samples/GUIDE.md`. Gated integration tests that report skipped are not a pass. `.github/workflows/native-platforms.yml` verifies native execution on each claimed RID; service smoke runs only on disposable service-manager hosts.
+
+The MIT license and implementation are authorized. Publishing a NuGet package or a public release still requires a separate request. Keep test service names and process IDs distinct from any user installation.
 
 When creating or updating a GitHub issue, pull request description, or comment, include this footer once, using the actual model and reasoning level:
 

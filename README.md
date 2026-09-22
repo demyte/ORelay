@@ -1,50 +1,96 @@
 # ORelay
 
-ORelay is a planned small, cross-platform local-development OAuth 2 authorization callback relay. It is intended for delegated API access, such as a local tool using Xero, rather than application sign-in.
-
-The design uses one provider-registered callback URL for a relay instance. Multiple Git worktrees can listen on different ports or hosts while sharing that callback. Each worktree would register its callback URL and receive an opaque registration ID. Each OAuth request would put that ID and its own opaque per-request value in `state`. ORelay would route the complete provider callback query to the matching worktree, preserving `state`, `code`, error fields, and other query values unchanged.
-
-The worktree would validate the complete state value and own the authorization-code exchange, access tokens, and refresh tokens. Both the authorization request and token exchange would use the fixed relay `redirect_uri`. ORelay only routes callbacks. The provider remains responsible for grant, consent, user, and tenant semantics, so a callback registration does not promise an independent provider grant for every worktree.
-
-## Status
-
-This repository is an initial scaffold and design proposal. There is no relay implementation, runnable command, service installer, hosting package, or supported configuration contract yet. Names and paths below are proposed and may change as implementation work is authorized.
-
-The [v1 specification](.scratch/orelay-v1/spec.md) records the requirements and open decisions. The [implementation tickets](.scratch/orelay-v1/issues/README.md) contain the approved delivery breakdown and dependencies.
-
-## Planned behavior
-
-- The relay would listen on loopback by default, with explicit non-loopback binding and callback destinations for shared development environments, including Tailscale. Management authentication is deferred; reachable clients can manage registrations in this version.
-- Registrations would live in memory. ORelay would store no database records, authorization codes, access tokens, or refresh tokens.
-- A registration lease would limit the lifetime of a crashed worktree registration. The sample proposal renews a lease every minute and expires it after five minutes.
-- Graceful deregistration would be best effort. Expired or unknown registration IDs would be rejected, with no fallback destination. New registrations would receive IDs distinct from old sessions.
-- Registration loss would report a restart-required state. Explicitly restarting the affected application or AppHost would obtain a fresh ID; existing authorization flows would need starting again.
-
-## Proposed implementation
-
-The proposed stack is .NET 10 with ASP.NET Core Minimal API and Kestrel. Self-contained, single-file Native AOT executables are required for Windows, macOS, and Linux. The exact architecture and minimum OS matrix will be documented with native execution evidence. The same executable would run directly or provide Windows Service and Linux systemd installation and lifecycle commands. The project will use the MIT license.
-
-The planned CLI includes `server`, `init`, `config get/set/clear`, `doctor`, `doctor --fix`, and `service` commands. Configuration would live in `orelay.json` beside the executable by default, with a global `--config-file` override. The server would create a missing file from defaults and supplied settings. When a file already exists, command-line settings would override it only for that invocation; permanent changes would use the config commands.
-
-The proposed source layout is:
+ORelay routes OAuth 2 authorization callbacks to development worktrees. Register one fixed callback URL with a provider such as Xero, then run any number of worktrees on different ports. Each worktree gets its own temporary registration ID.
 
 ```text
-src/
-  ORelay/
-  ORelay.Aspire.Hosting/
-packaging/
-  windows/
-  linux/
+Provider → ORelay /callback → browser redirect → the registered worktree
 ```
 
-`ORelay.Aspire.Hosting` would be a separate NuGet package referenced by a consuming AppHost. Its proposed `WithORelay(...)` extension would resolve the relay endpoint, start registration, inject configuration before an API starts, renew from the AppHost, and clean up on shutdown or resource restart. Registration loss would require an explicit application or AppHost restart.
+The worktree validates state and exchanges the authorization code directly with the provider. It owns its tokens and refresh logic. Use the fixed relay `redirect_uri` for both the authorization request and token exchange. Provider consent and grant rules still apply; separate worktrees do not guarantee separate provider grants.
 
-## Planned local flow
+## Run
 
-1. Start one relay locally or connect to an explicitly configured shared relay.
-2. A worktree registers its browser-reachable callback URL and receives an opaque registration ID.
-3. The worktree creates a provider authorization request using the fixed relay callback and a state value containing the registration ID and its own per-request value.
-4. The provider redirects to the relay. The relay validates the registration lease and forwards the complete callback query to that worktree.
-5. The worktree validates state and exchanges the code with the provider using the same fixed relay callback. The worktree keeps its tokens and refresh logic.
+ORelay is a .NET 10 application published as a self-contained Native AOT executable. The published executable runs without installing .NET. See [native builds and platform verification](docs/native-platforms.md) for the platform matrix and build prerequisites. Packages and public releases have not been published.
 
-These steps describe the proposal. They are not commands or supported features in this initial repository.
+```text
+orelay init
+orelay server --port 12987 --bind 127.0.0.1
+orelay doctor
+```
+
+Register `http://127.0.0.1:12987/callback` with your provider if its redirect-URI policy allows that address. The browser completing authorization must be able to reach both ORelay and the destination worktree. ORelay returns a browser redirect; it does not make a server-to-server callback request.
+
+The server creates a missing `orelay.json` beside the executable. Use a writable path when running from a protected installation directory, a service, or a container:
+
+```text
+orelay --config-file /data/orelay.json init --port 12987
+orelay --config-file /data/orelay.json server
+```
+
+Run `orelay --help` or append `--help` to a command. Commands run without interactive prompts. [CLI reference](docs/cli.md) covers settings, JSON output, exit codes, and services.
+
+## Register a worktree
+
+Send `POST /registrations` with an exact HTTP or HTTPS destination:
+
+```json
+{"callbackUrl":"http://127.0.0.1:5017/oauth/callback"}
+```
+
+The response includes `id`, `relayCallbackUrl`, `leaseSeconds`, and `expiresAt`. Construct OAuth state as `<id>.<your-random-state>`. Store and validate that complete state value in the worktree, including normal browser correlation and one-time consumption. ORelay uses only the ID prefix to select a destination.
+
+When the provider redirects to ORelay, it forwards the complete query unchanged, including state, code, errors, repeated fields, and encoded values. Unknown or expired registrations fail without a fallback destination.
+
+| Request | Effect |
+| --- | --- |
+| `POST /registrations` | Create a fresh registration and lease. |
+| `PUT /registrations/{id}/lease` | Renew a live registration; expired IDs return 404. |
+| `DELETE /registrations/{id}` | Deregister; repeated deletion succeeds. |
+| `GET /callback` | Redirect the browser using the ID in state. |
+| `GET /health` | Read the relay identity and health. |
+
+Registrations exist only in memory. The default lease is five minutes. Renew before expiry and deregister on shutdown. Lease expiry removes registrations left by crashed processes. Restarting ORelay loses every registration; affected applications need a fresh registration, and pending OAuth flows must start again.
+
+## Aspire
+
+`ORelay.Aspire.Hosting` is a separate NuGet library used by the consuming AppHost. Start ORelay separately, then connect your application resource:
+
+```csharp
+using ORelay.Aspire.Hosting;
+
+var relay = builder.AddORelay("relay", new Uri("http://127.0.0.1:12987"));
+builder.AddProject<Projects.Api>("api")
+    .WithORelay(relay, "/oauth/callback", endpointName: "http");
+```
+
+The AppHost registers before starting the application and injects `ORelay__RegistrationId` and `ORelay__RedirectUri`. It renews the lease even while the application is paused, and deregisters on resource or AppHost shutdown. Each registered resource has one instance; separate worktrees run separate AppHosts.
+
+If a registration is lost, the resource reports degraded health with a restart instruction. Explicitly restart the resource or AppHost to obtain a new ID. ORelay does not restart applications automatically. See [package usage](src/ORelay.Aspire.Hosting/PACKAGE.md) and the [sample with a synthetic OAuth provider](samples/GUIDE.md).
+
+## Shared relay
+
+The default listener and allowed destinations are loopback-only. To share a relay, explicitly bind a reachable interface and supply an advertised hostname or URL:
+
+```text
+orelay server --bind 0.0.0.0 --hostname relay.example.test
+orelay server --bind 0.0.0.0 --auto-discovery tailscale
+```
+
+Tailscale discovery uses the local Tailscale CLI. An explicit public URL or hostname takes precedence. Discovery chooses an address; it does not change firewall rules, application bindings, or provider registrations. Use `doctor` to check the resulting configuration.
+
+Management authentication is deferred in this version. Every client that can reach the management API can create, renew, or delete registrations. Shared binding also permits remote callback destinations. Choose network access accordingly.
+
+## Build and contribute
+
+Install the SDK pinned in `global.json`. From the checkout, these PowerShell scripts work on Windows, Linux, and macOS with PowerShell 7:
+
+```powershell
+./scripts/build.ps1
+./scripts/format.ps1
+./scripts/test.ps1
+./scripts/publish.ps1 -RuntimeIdentifier win-x64
+```
+
+Use the matching host and native compiler prerequisites when publishing for another RID. Run a focused test selection with `dotnet test tests/ORelay.Tests --filter FullyQualifiedName~Configuration`. Aspire integration tests require a running, run-owned relay; the sample guide gives the commands.
+
+The [v1 tickets](.scratch/orelay-v1/issues/README.md) track delivery and verification. ORelay is licensed under the [MIT license](LICENSE).

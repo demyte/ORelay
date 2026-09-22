@@ -1,0 +1,21 @@
+The native orelay executable installs its Windows Service through the Service
+Control Manager. No PowerShell script or separate runtime is required.
+
+The stored command line is the absolute executable followed by:
+
+  server --config-file <absolute configuration path>
+
+For `service install --name <service>`, the persisted command also contains
+`--service-name <service>` so the Generic Host lifetime uses the same SCM name.
+
+Installation creates a demand-start service running as LocalSystem. Installation
+does not start the service or configure automatic boot start; run `orelay service
+start` explicitly when it should run. Installing, starting, stopping, and
+uninstalling require an account with the corresponding SCM rights (normally an
+elevated Administrator). A status query only requests read access and should
+work for a normal account when the service ACL permits it.
+
+Grant LocalSystem read and write access to an alternate configuration directory
+before installing the service.
+The CLI refuses to replace a service whose stored command line does not match
+the requested executable and configuration paths.

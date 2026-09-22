@@ -1,0 +1,18 @@
+The native orelay executable writes an owned systemd unit to
+/etc/systemd/system/orelay.service when `orelay service install` runs with the
+required privilege. The generated unit runs as root, uses Type=simple, and
+starts the same executable with an absolute `--config-file` path.
+When a custom service name is selected, the unit also passes
+`--service-name <service>` to the server host.
+
+Installation writes and reloads the unit but does not start or enable it for
+boot. Run `orelay service start` explicitly; enabling the unit for boot remains
+an administrator choice using the normal systemd tooling. Installation,
+start/stop/restart, and uninstall require the privileges granted by the systemd
+manager and unit directory (normally root). Status is read-only when the
+systemd policy permits it. The uninstall operation disables the unit if needed.
+
+The command does not invoke a shell or ask systemd to elevate the caller. A
+missing systemd manager, an unwritable unit directory, or a conflicting unit
+returns an error and leaves the existing unit untouched. Uninstall removes the
+owned unit and preserves the executable and configuration file.

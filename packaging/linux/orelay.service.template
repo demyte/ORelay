@@ -1,0 +1,21 @@
+# The CLI generates this unit with absolute paths during `orelay service install`.
+# Keep this template for package builders that need to inspect the service shape.
+# Replace every @...@ value before installing it as a systemd unit.
+# Managed by ORelay. Do not edit.
+[Unit]
+Description=ORelay OAuth callback relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart="@ORELAY_EXECUTABLE@" "server" "--config-file" "@ORELAY_CONFIG@"
+WorkingDirectory="@ORELAY_DIRECTORY@"
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

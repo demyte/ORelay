@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable><IsTestProject>true</IsTestProject>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ORelayPackageVersion Condition="'$(ORelayPackageVersion)' == ''">0.1.0</ORelayPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Aspire.Hosting.Testing" />
+    <ProjectReference Include="../../src/ORelay.Aspire.Hosting/ORelay.Aspire.Hosting.csproj" Condition="'$(UseORelayPackage)' != 'true'" />
+    <PackageReference Include="ORelay.Aspire.Hosting" VersionOverride="$(ORelayPackageVersion)" Condition="'$(UseORelayPackage)' == 'true'" />
+    <ProjectReference Include="../../samples/ORelay.Sample.AppHost/ORelay.Sample.AppHost.csproj" />
+  </ItemGroup>
+</Project>
