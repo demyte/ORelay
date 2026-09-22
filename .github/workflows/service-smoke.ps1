@@ -451,13 +451,20 @@ else {
 }
 $script:ServiceExecutable = Join-Path $script:WorkPath $serviceFileName
 $script:ConfigPath = Join-Path $script:WorkPath 'service config path.json'
-$script:ServiceLauncher = $script:ServiceExecutable
-$script:ServiceLauncherPrefix = if ($script:IsLinuxPlatform -and -not $script:IsRootUser -and $null -ne $script:SudoPath) { @('-n', $script:ServiceExecutable) } else { @() }
+if ($script:IsLinuxPlatform -and -not $script:IsRootUser -and $null -ne $script:SudoPath) {
+    $script:ServiceLauncher = $script:SudoPath
+    $script:ServiceLauncherPrefix = @('-n', $script:ServiceExecutable)
+}
+else {
+    $script:ServiceLauncher = $script:ServiceExecutable
+    $script:ServiceLauncherPrefix = @()
+}
 $serviceName = "orelay-ci-$([Guid]::NewGuid().ToString('N'))"
 $conflictName = "orelay-ci-conflict-$([Guid]::NewGuid().ToString('N'))"
 $ownedServiceInstalled = $false
 $ownedServiceWasInstalled = $false
 $ownedServiceCleanupAttempted = $false
+$script:PrimaryError = $null
 $conflictDefinitionCreated = $false
 $httpClient = $null
 
@@ -615,6 +622,10 @@ try {
             ExistsAfterUninstall = $true
         })
 }
+catch {
+    $script:PrimaryError = $_.Exception
+    throw
+}
 finally {
     if ($null -ne $httpClient) {
         $httpClient.Dispose()
@@ -663,6 +674,7 @@ finally {
             OwnedServiceWasInstalled = $ownedServiceWasInstalled
             OwnedServiceCleanupAttempted = $ownedServiceCleanupAttempted
             FinalServiceStatus = $finalServiceStatus
+            PrimaryError = if ($null -eq $script:PrimaryError) { $null } else { $script:PrimaryError.Message }
             CleanupError = $cleanupError
         })
     if ($conflictDefinitionCreated) {
@@ -680,7 +692,10 @@ finally {
         catch {
         }
     }
-    if ($null -ne $cleanupError) {
+    if ($null -ne $cleanupError -and $null -eq $script:PrimaryError) {
         throw $cleanupError
+    }
+    if ($null -ne $cleanupError -and $null -ne $script:PrimaryError) {
+        Write-Warning "Service cleanup also failed after the primary error: $cleanupError"
     }
 }

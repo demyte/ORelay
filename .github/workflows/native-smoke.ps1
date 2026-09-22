@@ -152,17 +152,79 @@ function Hide-DotnetRuntimeForProof {
         throw "The run-owned runtime hide path already exists: '$hiddenPath'."
     }
 
-    Move-Item -LiteralPath $Layout.SharedPath -Destination $hiddenPath
+    Assert-RuntimeMoveScope -Root $Layout.InstallationRoot -Path $Layout.SharedPath -ExpectedLeaf 'shared'
+    Assert-RuntimeMoveScope -Root $Layout.InstallationRoot -Path $hiddenPath -ExpectedLeafPattern '^shared\.orelay-hidden-[0-9a-f]{32}$'
+    $usedSudo = Move-RuntimeDirectory -Source $Layout.SharedPath -Destination $hiddenPath
     $script:RuntimeHideState = [pscustomobject]@{
+        InstallationRoot = $Layout.InstallationRoot
         OriginalPath = $Layout.SharedPath
         HiddenPath = $hiddenPath
+        UsedSudo = $usedSudo
     }
     [pscustomobject]@{
         Enabled = $true
         InstallationRoot = $Layout.InstallationRoot
         OriginalPath = $Layout.SharedPath
         HiddenPath = $hiddenPath
+        UsedSudo = $usedSudo
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:EvidencePath runtime-hide.json)
+}
+
+function Assert-RuntimeMoveScope {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Root,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [string]$ExpectedLeaf,
+
+        [string]$ExpectedLeafPattern
+    )
+
+    $fullRoot = [System.IO.Path]::GetFullPath($Root)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    if ([System.IO.Path]::GetDirectoryName($fullPath) -cne $fullRoot) {
+        throw "Runtime move path is outside the validated dotnet installation root: '$fullPath'."
+    }
+
+    $leaf = [System.IO.Path]::GetFileName($fullPath)
+    if (($ExpectedLeaf -and $leaf -cne $ExpectedLeaf) -or
+        ($ExpectedLeafPattern -and $leaf -notmatch $ExpectedLeafPattern)) {
+        throw "Runtime move path has an unexpected leaf name: '$leaf'."
+    }
+}
+
+function Move-RuntimeDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    try {
+        Move-Item -LiteralPath $Source -Destination $Destination
+        return $false
+    }
+    catch [System.UnauthorizedAccessException] {
+        if ($IsWindows) {
+            throw
+        }
+
+        $sudo = Get-Command sudo -ErrorAction SilentlyContinue
+        if ($null -eq $sudo) {
+            throw
+        }
+
+        $output = @(& $sudo.Source -n mv -- $Source $Destination 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "sudo mv could not move the selected dotnet runtime directory: $($output -join ' ')"
+        }
+        return $true
+    }
 }
 
 function Restore-DotnetRuntimeAfterProof {
@@ -170,6 +232,10 @@ function Restore-DotnetRuntimeAfterProof {
         return
     }
 
+    Assert-RuntimeMoveScope -Root $script:RuntimeHideState.InstallationRoot `
+        -Path $script:RuntimeHideState.OriginalPath -ExpectedLeaf 'shared'
+    Assert-RuntimeMoveScope -Root $script:RuntimeHideState.InstallationRoot `
+        -Path $script:RuntimeHideState.HiddenPath -ExpectedLeafPattern '^shared\.orelay-hidden-[0-9a-f]{32}$'
     if (Test-Path -LiteralPath $script:RuntimeHideState.OriginalPath) {
         throw "Cannot restore the dotnet shared runtime because the original path is no longer empty: '$($script:RuntimeHideState.OriginalPath)'."
     }
@@ -177,10 +243,11 @@ function Restore-DotnetRuntimeAfterProof {
         throw "The hidden dotnet shared runtime was not found at '$($script:RuntimeHideState.HiddenPath)'."
     }
 
-    Move-Item -LiteralPath $script:RuntimeHideState.HiddenPath -Destination $script:RuntimeHideState.OriginalPath
+    $usedSudo = Move-RuntimeDirectory -Source $script:RuntimeHideState.HiddenPath -Destination $script:RuntimeHideState.OriginalPath
     [pscustomobject]@{
         Restored = $true
         OriginalPath = $script:RuntimeHideState.OriginalPath
+        UsedSudo = $usedSudo
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $script:EvidencePath runtime-restore.json)
     $script:RuntimeHideState = $null
 }
@@ -231,12 +298,41 @@ dotnet --info 2>&1 | Set-Content -LiteralPath (Join-Path $evidencePath dotnet-in
 $dotnetLayout = Get-DotnetRuntimeLayout
 $dotnetLayout | Select-Object CommandPath, InstallationRoot, SharedPath, RuntimeFamilyPath |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidencePath dotnet-location.json)
+$managedProbeFullPath = $null
+if ($HideRuntimeForProof) {
+    if ([string]::IsNullOrWhiteSpace($ManagedProbePath) -or
+        -not (Test-Path -LiteralPath $ManagedProbePath -PathType Leaf)) {
+        throw "A framework-dependent managed probe is required when runtime hiding is enabled: '$ManagedProbePath'."
+    }
+
+    $managedProbeFullPath = [System.IO.Path]::GetFullPath($ManagedProbePath)
+    $probeDotnetRoot = $env:DOTNET_ROOT
+    $probeDotnetRootX64 = $env:DOTNET_ROOT_x64
+    try {
+        $env:DOTNET_ROOT = $dotnetLayout.InstallationRoot
+        $env:DOTNET_ROOT_x64 = $dotnetLayout.InstallationRoot
+        $positiveProbeOutput = @(& $dotnetLayout.CommandPath $managedProbeFullPath '--version' 2>&1)
+        $positiveProbeExitCode = $LASTEXITCODE
+    }
+    finally {
+        $env:DOTNET_ROOT = $probeDotnetRoot
+        $env:DOTNET_ROOT_x64 = $probeDotnetRootX64
+    }
+    [pscustomobject]@{
+        Path = $managedProbeFullPath
+        ExitCode = $positiveProbeExitCode
+        Output = $positiveProbeOutput
+        RuntimeHidden = $false
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidencePath managed-runtime-positive-control.json)
+    if ($positiveProbeExitCode -ne 0) {
+        throw "Framework-dependent control exited with code $positiveProbeExitCode before runtime hiding."
+    }
+}
+
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 if ($null -ne $dotnetCommand) {
-    $dotnetDirectory = [System.IO.Path]::GetDirectoryName($dotnetLayout.CommandPath)
     $pathEntries = @($env:PATH -split [System.IO.Path]::PathSeparator | Where-Object {
         $_ -and
-        $_ -ne $dotnetDirectory -and
         $_ -ne $dotnetLayout.InstallationRoot
     })
     $env:PATH = $pathEntries -join [System.IO.Path]::PathSeparator
@@ -246,17 +342,12 @@ $env:DOTNET_ROOT_x64 = $env:DOTNET_ROOT
 
 Hide-DotnetRuntimeForProof -Layout $dotnetLayout
 if ($HideRuntimeForProof) {
-    if ([string]::IsNullOrWhiteSpace($ManagedProbePath) -or
-        -not (Test-Path -LiteralPath $ManagedProbePath -PathType Leaf)) {
-        throw "A framework-dependent managed probe is required when runtime hiding is enabled: '$ManagedProbePath'."
-    }
-
     $probeDotnetRoot = $env:DOTNET_ROOT
     $probeDotnetRootX64 = $env:DOTNET_ROOT_x64
     try {
         $env:DOTNET_ROOT = $dotnetLayout.InstallationRoot
         $env:DOTNET_ROOT_x64 = $dotnetLayout.InstallationRoot
-        $probeOutput = @(& $dotnetLayout.CommandPath $ManagedProbePath '--version' 2>&1)
+        $probeOutput = @(& $dotnetLayout.CommandPath $managedProbeFullPath '--version' 2>&1)
         $probeExitCode = $LASTEXITCODE
     }
     finally {
@@ -264,13 +355,16 @@ if ($HideRuntimeForProof) {
         $env:DOTNET_ROOT_x64 = $probeDotnetRootX64
     }
     [pscustomobject]@{
-        Path = [System.IO.Path]::GetFullPath($ManagedProbePath)
+        Path = $managedProbeFullPath
         ExitCode = $probeExitCode
         Output = $probeOutput
         RuntimeHidden = $true
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidencePath managed-runtime-negative-control.json)
-    if ($probeExitCode -eq 0) {
-        throw 'The framework-dependent negative control ran while the selected runtime directory was hidden.'
+    $negativeProbeText = $probeOutput -join [Environment]::NewLine
+    if ($probeExitCode -eq 0 -or
+        $negativeProbeText -notmatch '(?i)(No frameworks were found|You must install or update \.NET)' -or
+        $negativeProbeText -notmatch '(?i)Microsoft\.NETCore\.App') {
+        throw 'The framework-dependent negative control did not report the expected missing Microsoft.NETCore.App framework while the selected runtime directory was hidden.'
     }
 }
 
