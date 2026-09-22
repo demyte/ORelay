@@ -1,0 +1,179 @@
+name: Native platform artifacts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-platforms-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: 10.0.401
+  PROJECT_PATH: src/ORelay/ORelay.csproj
+
+jobs:
+  native:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            runner: windows-2025
+            executable: orelay.exe
+          - rid: win-arm64
+            runner: windows-11-arm
+            executable: orelay.exe
+          - rid: linux-x64
+            runner: ubuntu-24.04
+            executable: orelay
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            executable: orelay
+          - rid: osx-x64
+            runner: macos-15-intel
+            executable: orelay
+          - rid: osx-arm64
+            runner: macos-14
+            executable: orelay
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Prepare run-owned paths
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runRoot = Join-Path $env:RUNNER_TEMP "orelay-native-$env:RID-$([Guid]::NewGuid().ToString('N'))"
+          New-Item -ItemType Directory -Path $runRoot, (Join-Path $runRoot publish), (Join-Path $runRoot evidence), (Join-Path $runRoot artifact) | Out-Null
+          "RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Linux Native AOT prerequisites
+        if: startsWith(matrix.rid, 'linux-')
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install --yes clang zlib1g-dev
+
+      - name: Check native toolchain
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RID.StartsWith('linux-')) {
+            if (-not (Get-Command clang -ErrorAction SilentlyContinue)) { throw 'clang is required for Linux Native AOT publishing.' }
+            clang --version | Select-Object -First 1
+          } elseif ($env:RID.StartsWith('osx-')) {
+            if (-not (Get-Command xcrun -ErrorAction SilentlyContinue)) { throw 'xcrun is required for macOS Native AOT publishing.' }
+            xcrun --sdk macosx --show-sdk-path
+            clang --version | Select-Object -First 1
+          } else {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio discovery tool is missing.' }
+            $component = if ($env:RID -eq 'win-arm64') { 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' } else { 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' }
+            $vsPath = & $vswhere -latest -products '*' -requires $component -property installationPath
+            if ([string]::IsNullOrWhiteSpace($vsPath)) { throw 'Visual Studio C++ build tools are required for Windows Native AOT publishing.' }
+            $vsPath.Trim()
+          }
+
+      - name: Restore
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          dotnet restore $env:PROJECT_PATH --runtime $env:RID
+          if ($LASTEXITCODE -ne 0) { throw "dotnet restore failed with exit code $LASTEXITCODE." }
+
+      - name: Publish Native AOT executable
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publish = Join-Path $env:RUN_ROOT publish
+          dotnet publish $env:PROJECT_PATH --configuration Release --runtime $env:RID --self-contained true --output $publish -p:PublishAot=true -p:PublishSingleFile=true -p:StripSymbols=false --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+
+      - name: Exercise published executable and callback
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/native-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -PublishedDirectory (Join-Path $env:RUN_ROOT publish) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID `
+            -ExecutableName $env:EXECUTABLE_NAME
+          if ($LASTEXITCODE -ne 0) { throw "Native smoke failed with exit code $LASTEXITCODE." }
+
+      - name: Exercise installed service lifecycle (x64)
+        if: matrix.rid == 'win-x64' || matrix.rid == 'linux-x64'
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/service-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID `
+            -RequireServiceProof
+          if ($LASTEXITCODE -ne 0) { throw "Service smoke failed with exit code $LASTEXITCODE." }
+
+      - name: Package executable and checksum
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $artifactRoot = Join-Path $env:RUN_ROOT artifact
+          $staging = Join-Path $env:RUN_ROOT staging
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item -LiteralPath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) -Destination $staging -Force
+          Get-ChildItem -LiteralPath (Join-Path $env:RUN_ROOT publish) -Filter '*.pdb' -File | Copy-Item -Destination $staging -Force
+          Copy-Item -LiteralPath LICENSE -Destination $staging -Force
+          if ($env:RID.StartsWith('win-')) {
+            $archive = Join-Path $artifactRoot "orelay-$env:RID.zip"
+            Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archive
+          } else {
+            $archive = Join-Path $artifactRoot "orelay-$env:RID.tar.gz"
+            tar -czf $archive -C $staging .
+          }
+          Get-FileHash -LiteralPath $archive -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $([IO.Path]::GetFileName($archive))" } | Set-Content -LiteralPath "$archive.sha256"
+          New-Item -ItemType Directory -Path (Join-Path $artifactRoot evidence) -Force | Out-Null
+          Copy-Item -Path (Join-Path (Join-Path $env:RUN_ROOT evidence) '*') -Destination (Join-Path $artifactRoot evidence) -Recurse -Force
+
+      - name: Upload native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orelay-${{ matrix.rid }}-evidence
+          path: ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/evidence
+          if-no-files-found: warn
+
+      - name: Upload native artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orelay-${{ matrix.rid }}
+          path: ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/artifact
+          if-no-files-found: error

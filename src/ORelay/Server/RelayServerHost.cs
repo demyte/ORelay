@@ -86,7 +86,8 @@ public static class RelayServerHost
     private static string FormatBind(string bind)
     {
         var normalized = bind.Trim('[', ']');
-        if (normalized is "localhost" or "0.0.0.0" or "::" or "*" or "+")
+        if (normalized.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            normalized is "0.0.0.0" or "::" or "*" or "+")
         {
             return normalized;
         }
