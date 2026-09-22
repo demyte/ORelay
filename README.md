@@ -27,13 +27,13 @@ The proposed source layout is:
 ```text
 src/
   ORelay/
-  OAuthRelay.Aspire.Hosting/
+  ORelay.Aspire.Hosting/
 packaging/
   windows/
   linux/
 ```
 
-`OAuthRelay.Aspire.Hosting` would remain a separate planned package. Its proposed `WithOAuthRelay(...)` extension would resolve the relay endpoint, start registration, inject configuration before an API starts, renew the AppHost lease, and clean up on shutdown or resource restart. The restart and reconnection contract still needs a design decision.
+`ORelay.Aspire.Hosting` would remain a separate planned package. Its proposed `WithOAuthRelay(...)` extension would resolve the relay endpoint, start registration, inject configuration before an API starts, renew the AppHost lease, and clean up on shutdown or resource restart. The restart and reconnection contract still needs a design decision.
 
 ## Planned local flow
 

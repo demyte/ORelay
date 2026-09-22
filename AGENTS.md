@@ -2,6 +2,8 @@
 
 ORelay is a local-development OAuth 2 authorization callback relay for delegated API access. Keep the project small and provider-agnostic. Its job is to route callbacks to registered local worktrees. Provider grant and consent behavior, code exchange, token storage, and token refresh belong to the worktree or provider integration, not to the relay.
 
+Load `C:\Users\james\.agents\skills\unslop\SKILL.md` before writing or revising project prose, and apply its plain-language guidance.
+
 Treat the relay core, Aspire hosting integration, and operating-system packaging as separate concerns. Do not add a database or token store for the in-memory registration design. Default to a local-only listener and loopback callback destinations. Reject expired or unknown registration IDs without choosing a fallback destination.
 
 The README is a design proposal until code and tests implement a behavior. Keep proposed names, endpoints, package layouts, and commands marked as planned. Do not describe restart reconnection or registration-ID propagation as solved until the mechanism is implemented and tested.
@@ -15,3 +17,10 @@ When implementation begins:
 - Keep changes within the relay scope unless James explicitly authorizes a broader feature or service installation.
 
 Do not select a license, publish packages, or create external service configuration without an explicit request.
+
+When creating or updating a GitHub issue, pull request description, or comment, include this footer once, using the actual model and reasoning level:
+
+```md
+> Written by Codex on behalf of James.
+> _Codex [MODEL_SLUG] [REASONING_LEVEL]_
+```
