@@ -399,6 +399,14 @@ public static class DoctorCommand
             Query = string.Empty,
             Fragment = string.Empty,
         };
+        // Probe the actual loopback listener without waiting for localhost's
+        // other address family. Explicit public URLs retain their own routing.
+        if (options.PublicUrl is null && callback.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) &&
+            IPAddress.TryParse(options.Bind.Trim('[', ']'), out var address) && IPAddress.IsLoopback(address))
+        {
+            builder.Host = address.ToString();
+        }
+
         return builder.Uri;
     }
 

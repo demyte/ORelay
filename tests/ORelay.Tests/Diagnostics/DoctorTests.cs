@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ORelay.Cli;
+using ORelay.Configuration;
 using ORelay.Diagnostics;
 using ORelay.Discovery;
 
@@ -7,6 +8,24 @@ namespace ORelay.Tests.Diagnostics;
 
 public sealed class DoctorTests
 {
+    [Theory]
+    [InlineData("127.0.0.1", null, "http://127.0.0.1:12987/health")]
+    [InlineData("::1", null, "http://[::1]:12987/health")]
+    [InlineData("127.0.0.1", "http://localhost:13000", "http://localhost:13000/health")]
+    public async Task LocalhostHealthUsesTheBoundAddressUnlessPublicUrlIsExplicit(string bind, string? publicUrl, string expectedHealthUrl)
+    {
+        using var directory = new TemporaryDirectory();
+        var config = Path.Combine(directory.Path, "orelay.json");
+        new RelayConfigurationStore(config).Init(new RelaySettingsPatch(Bind: bind, PublicUrl: publicUrl));
+        var runtime = HealthyRuntime();
+
+        var code = await DoctorCommand.ExecuteAsync(
+            Options(config, json: true, fix: false), new StringWriter(), new StringWriter(), runtime);
+
+        Assert.Equal(DoctorExitCodes.Success, code);
+        Assert.Equal(expectedHealthUrl, Assert.IsType<FakeHealthProbe>(runtime.HealthProbe).RequestedUrl!.AbsoluteUri);
+    }
+
     [Fact]
     public async Task ReadOnlyDoctorDoesNotCreateMissingConfiguration()
     {
@@ -136,7 +155,13 @@ public sealed class DoctorTests
 
     private sealed class FakeHealthProbe(RelayHealthProbeResult result) : IRelayHealthProbe
     {
-        public Task<RelayHealthProbeResult> CheckAsync(Uri healthUrl, CancellationToken cancellationToken = default) => Task.FromResult(result);
+        public Uri? RequestedUrl { get; private set; }
+
+        public Task<RelayHealthProbeResult> CheckAsync(Uri healthUrl, CancellationToken cancellationToken = default)
+        {
+            RequestedUrl = healthUrl;
+            return Task.FromResult(result);
+        }
     }
 
     private sealed class FakePortProbe(PortOccupancyProbeResult result) : IPortOccupancyProbe

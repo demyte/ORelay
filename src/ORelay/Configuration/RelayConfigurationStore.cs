@@ -54,11 +54,7 @@ public sealed class RelayConfigurationStore
     public RelaySettings Read(RelaySettingsPatch? invocationOverrides = null)
     {
         var document = ReadDocumentIfPresent() ?? new RelayConfigurationDocument();
-        var effective = document.ToPatch().ApplyTo(RelayConfigurationDefaults.Settings);
-        if (invocationOverrides is not null)
-        {
-            effective = invocationOverrides.ApplyTo(effective);
-        }
+        var effective = ResolveSettings(document.ToPatch(), invocationOverrides);
 
         return RelaySettingsValidator.ValidateAndReturn(effective, FilePath);
     }
@@ -80,11 +76,10 @@ public sealed class RelayConfigurationStore
         using var fileLock = AcquireLock();
         if (GetFileState() == ConfigurationFileState.Present)
         {
-            return ReadDocument().ToPatch().ApplyTo(RelayConfigurationDefaults.Settings);
+            return Read();
         }
 
-        var effective = (invocationOverrides ?? new RelaySettingsPatch())
-            .ApplyTo(RelayConfigurationDefaults.Settings);
+        var effective = ResolveSettings(null, invocationOverrides);
         RelaySettingsValidator.Validate(effective, FilePath);
         WriteDocument(RelayConfigurationDocument.FromSettings(effective));
         return effective;
@@ -110,7 +105,7 @@ public sealed class RelayConfigurationStore
         ApplyPatch(document, setting, patch);
         RelaySettingsValidator.ValidateDocument(document, FilePath);
         WriteDocument(document);
-        return document.ToPatch().ApplyTo(RelayConfigurationDefaults.Settings);
+        return ResolveSettings(document.ToPatch());
     }
 
     public RelaySettings Clear(string key)
@@ -139,7 +134,7 @@ public sealed class RelayConfigurationStore
         ClearProperty(document, setting);
         RelaySettingsValidator.ValidateDocument(document, FilePath);
         WriteDocument(document);
-        return document.ToPatch().ApplyTo(RelayConfigurationDefaults.Settings);
+        return ResolveSettings(document.ToPatch());
     }
 
     public RelaySettings Load(RelaySettingsPatch? invocationOverrides = null) => Read(invocationOverrides);
@@ -175,6 +170,22 @@ public sealed class RelayConfigurationStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(Clear(key));
+    }
+
+    private static RelaySettings ResolveSettings(RelaySettingsPatch? saved, RelaySettingsPatch? invocationOverrides = null)
+    {
+        var effective = saved?.ApplyTo(RelayConfigurationDefaults.Settings) ?? RelayConfigurationDefaults.Settings;
+        effective = invocationOverrides?.ApplyTo(effective) ?? effective;
+
+        // A default hostname must not suppress requested discovery. A hostname
+        // explicitly saved or supplied on the command line still takes precedence.
+        if (saved?.Hostname is null && invocationOverrides?.Hostname is null &&
+            string.Equals(effective.AutoDiscovery, "tailscale", StringComparison.OrdinalIgnoreCase))
+        {
+            effective = effective with { Hostname = null };
+        }
+
+        return effective;
     }
 
     private RelayConfigurationDocument? ReadDocumentIfPresent()

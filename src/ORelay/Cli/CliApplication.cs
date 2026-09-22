@@ -152,6 +152,7 @@ public static class CliApplication
         builder.AppendLine("Defaults:");
         builder.Append("  port=").Append(RelayConfigurationDefaults.Port)
             .Append(", bind=").Append(RelayConfigurationDefaults.Bind)
+            .Append(", hostname=").Append(RelayConfigurationDefaults.Hostname)
             .Append(", auto-discovery=").Append(RelayConfigurationDefaults.AutoDiscovery)
             .AppendLine();
         builder.Append("  lease-seconds=").Append(RelayConfigurationDefaults.LeaseSeconds)

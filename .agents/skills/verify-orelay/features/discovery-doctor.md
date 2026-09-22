@@ -23,6 +23,8 @@ orelay --config-file .run\missing.json doctor --fix --json
 
 The verification helper runs doctor against a live relay and compares the configuration hash before and after. It also runs read-only doctor against a missing file and asserts exit code `1` plus no file creation. It does not claim a Tailscale pass because that requires the local daemon and a browser-reachable candidate. Use `src/ORelay/Discovery/CallbackDiscovery.cs`, `RelaySettingsDiscovery.cs`, `DiscoveryJson.cs`, and `TailscaleStatusProcessProvider.cs` as the source contract for a focused discovery run.
 
+The default configuration advertises `localhost` while listening on `127.0.0.1`. Doctor probes the bound loopback IP in this case; explicit public URLs retain their own address. The helper passes a unique `--name` to doctor so the user's installed service does not affect the foreground run.
+
 For shared proof, choose run-owned ports on an available Tailscale interface, launch with `--auto-discovery tailscale`, and run doctor before registering a destination. Follow the redirect from the declared browser host and compare the destination's raw request target. Record that host's network position. If it cannot resolve the discovered DNS name, retain that failure and rerun with an explicit reachable `--hostname` IP; do not change DNS or firewall settings as a repair.
 
 To verify occupied-port diagnosis, bind a run-owned foreign HTTP listener and return a non-ORelay identity from `/health`. Point a disposable saved config at that port and invoke the native `doctor --json`. Expect exit 1, failed management identity and occupied-port checks, an unchanged config hash, and a listener that remains running until the verifier closes it. A fake health probe alone does not prove this path.
@@ -33,3 +35,4 @@ To verify occupied-port diagnosis, bind a run-owned foreign HTTP listener and re
 - A successful relay health probe proves relay identity only. It does not prove callback reachability from a browser or worktree host.
 - `doctor --fix` is a write operation and must use disposable run-owned state.
 - Missing Tailscale, ambiguous status, and incompatible bindings are diagnostic outcomes. They are not permission to select a guessed hostname.
+- An explicitly saved hostname takes precedence over Tailscale. Clear `hostname` when switching an initialized local config to discovery; a new config created with `--auto-discovery tailscale` leaves the hostname unset for discovery.

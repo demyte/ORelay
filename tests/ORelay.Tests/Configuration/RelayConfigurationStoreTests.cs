@@ -4,11 +4,67 @@ using System.Text;
 using System.Text.Json;
 using ORelay.Cli;
 using ORelay.Configuration;
+using ORelay.Discovery;
+using ORelay.Server;
 
 namespace ORelay.Tests.Configuration;
 
 public sealed class RelayConfigurationStoreTests
 {
+    [Fact]
+    public void DefaultInitializationWritesTheLocalhostTemplate()
+    {
+        using var fixture = new ConfigurationFixture();
+        var store = fixture.Store;
+        Assert.Equal("localhost", store.Read().Hostname);
+        Assert.False(store.Exists);
+
+        store.Init();
+
+        using var expected = JsonDocument.Parse("""
+            {
+              "schemaVersion": 1,
+              "port": 12987,
+              "bind": "127.0.0.1",
+              "hostname": "localhost",
+              "autoDiscovery": "none",
+              "leaseSeconds": 300,
+              "maxRegistrations": 1000
+            }
+            """);
+        using var actual = JsonDocument.Parse(File.ReadAllText(store.FilePath));
+        Assert.True(JsonElement.DeepEquals(expected.RootElement, actual.RootElement));
+        Assert.Equal("http://localhost:12987/callback", RelayServerOptions.FromSettings(store.Read()).RelayCallbackUrl);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TailscaleDiscoveryWorksWhenNoHostnameIsExplicit(bool initializeWithTailscale)
+    {
+        using var fixture = new ConfigurationFixture();
+        var store = fixture.Store;
+        if (initializeWithTailscale)
+        {
+            store.Init(new RelaySettingsPatch(AutoDiscovery: "tailscale"));
+        }
+        else
+        {
+            store.Init();
+            store.Set("autoDiscovery", "tailscale");
+            var explicitHost = await RelaySettingsDiscovery.ResolveAsync(store.Read(), new FixedTailscaleProvider());
+            Assert.Equal("explicit-hostname", explicitHost.Source);
+            Assert.Equal("localhost", explicitHost.Settings!.Hostname);
+            Assert.Null(store.Clear("hostname").Hostname);
+        }
+
+        Assert.Null(store.ReadSavedDocument()!.Hostname);
+        var discovered = await RelaySettingsDiscovery.ResolveAsync(store.Read(), new FixedTailscaleProvider());
+        Assert.True(discovered.Succeeded);
+        Assert.Equal("tailscale", discovered.Source);
+        Assert.Equal("http://relay.tailnet.test:12987/callback", RelayServerOptions.FromSettings(discovered.Settings!).RelayCallbackUrl);
+    }
+
     [Fact]
     public void InitWritesDefaultsAndKeepsExistingFileOnRepeat()
     {
@@ -176,6 +232,12 @@ public sealed class RelayConfigurationStoreTests
     private static string Hash(string path)
     {
         return Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+    }
+
+    private sealed class FixedTailscaleProvider : ITailscaleStatusProvider
+    {
+        public Task<TailscaleStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new TailscaleStatusSnapshot(true, "Running", "relay.tailnet.test", null, []));
     }
 
     private sealed class ConfigurationFixture : IDisposable

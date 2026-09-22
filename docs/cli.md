@@ -30,12 +30,14 @@ The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic repl
 | `port` | `--port` | `12987` |
 | `bind` | `--bind` | `127.0.0.1` |
 | `publicUrl` | `--public-url` | Unset |
-| `hostname` | `--hostname` | Unset |
+| `hostname` | `--hostname` | `localhost` |
 | `autoDiscovery` | `--auto-discovery` | `none` |
 | `leaseSeconds` | `--lease-seconds` | `300` |
 | `maxRegistrations` | `--max-registrations` | `1000` |
 
 Ports range from 1 to 65535, leases from 1 to 86400 seconds, and registration capacity from 1 to 1000000. Discovery accepts `none`, `local`, or `tailscale`. `none` and `local` use the configured listener/hostname for the relay; neither runs Tailscale.
+
+For `tailscale`, an unset hostname is discovered instead of using the `localhost` default. If an existing file contains `hostname`, it remains an explicit override. Use `orelay config clear hostname` to allow discovery after selecting `tailscale`.
 
 `publicUrl` takes precedence over `hostname`. It can be a base URL, with `/callback` appended, or a complete URL ending in `/callback`. A path prefix is preserved. It must use HTTP or HTTPS without credentials, a query, or a fragment. ORelay itself serves HTTP; an HTTPS public URL requires an operator-managed TLS endpoint that forwards to it.
 
@@ -65,6 +67,8 @@ orelay --config-file ./orelay.json doctor --fix
 ```
 
 Doctor checks the selected config, listener and advertised address, relay health identity, port occupancy, discovery prerequisites, and supported service state. It is read-only by default. `--fix` creates a missing config file, then runs the same checks. It does not replace malformed files, stop port owners, modify network bindings, or install services. A successful config repair can still return an unhealthy result if the relay is not running.
+
+When `localhost` is advertised on an explicit loopback IP binding, the health check uses that bound IP to avoid probing the wrong address family. An explicit `publicUrl` keeps its configured health-check address.
 
 ## Services
 

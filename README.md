@@ -18,9 +18,23 @@ orelay server --port 12987 --bind 127.0.0.1
 orelay doctor
 ```
 
-Register `http://127.0.0.1:12987/callback` with your provider if its redirect-URI policy allows that address. The browser completing authorization must be able to reach both ORelay and the destination worktree. ORelay returns a browser redirect; it does not make a server-to-server callback request.
+Register `http://localhost:12987/callback` with your provider if its redirect-URI policy allows that address. The browser completing authorization must be able to reach both ORelay and the destination worktree. ORelay returns a browser redirect; it does not make a server-to-server callback request.
 
-The server creates a missing `orelay.json` beside the executable. Use a writable path when running from a protected installation directory, a service, or a container:
+The server, `init`, and `doctor --fix` create a missing `orelay.json` beside the executable with these defaults, plus any supplied setting overrides. Existing files are preserved.
+
+```json
+{
+  "schemaVersion": 1,
+  "port": 12987,
+  "bind": "127.0.0.1",
+  "hostname": "localhost",
+  "autoDiscovery": "none",
+  "leaseSeconds": 300,
+  "maxRegistrations": 1000
+}
+```
+
+Use a writable path when running from a protected installation directory, a service, or a container:
 
 ```text
 orelay --config-file /data/orelay.json init --port 12987
@@ -80,7 +94,7 @@ orelay server --bind 0.0.0.0 --hostname relay.example.test
 orelay server --bind 0.0.0.0 --auto-discovery tailscale
 ```
 
-Tailscale discovery uses the local Tailscale CLI. An explicit public URL or hostname takes precedence. Discovery chooses an address; it does not change firewall rules, application bindings, or provider registrations. Use `doctor` to check the resulting configuration.
+Tailscale discovery uses the local Tailscale CLI. An explicit public URL or saved hostname takes precedence. For an existing configuration containing `hostname`, use `orelay config clear hostname` when switching to Tailscale discovery. Discovery chooses an address; it does not change firewall rules, application bindings, or provider registrations. Use `doctor` to check the resulting configuration.
 
 Management authentication is deferred in this version. Every client that can reach the management API can create, renew, or delete registrations. Shared binding also permits remote callback destinations. Choose network access accordingly.
 

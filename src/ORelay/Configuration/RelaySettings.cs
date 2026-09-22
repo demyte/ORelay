@@ -17,6 +17,7 @@ public static class RelayConfigurationDefaults
 {
     public const int Port = 12_987;
     public const string Bind = "127.0.0.1";
+    public const string Hostname = "localhost";
     public const string AutoDiscovery = "none";
     public const int LeaseSeconds = 300;
     public const int MaxRegistrations = 1_000;
@@ -25,7 +26,7 @@ public static class RelayConfigurationDefaults
         Port,
         Bind,
         PublicUrl: null,
-        Hostname: null,
+        Hostname,
         AutoDiscovery,
         LeaseSeconds,
         MaxRegistrations);
@@ -46,7 +47,7 @@ public sealed record RelaySettings(
             RelayConfigurationDefaults.Port,
             RelayConfigurationDefaults.Bind,
             null,
-            null,
+            RelayConfigurationDefaults.Hostname,
             RelayConfigurationDefaults.AutoDiscovery,
             RelayConfigurationDefaults.LeaseSeconds,
             RelayConfigurationDefaults.MaxRegistrations)

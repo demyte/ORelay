@@ -460,6 +460,24 @@ try {
     [void](Invoke-Native -Arguments @('invalid-command') -EvidenceName 'cli-invalid-command' -ExpectedExitCode 64)
     [void](Invoke-Native -Arguments @('doctor', '--help') -EvidenceName 'doctor-help')
 
+    $defaultsPath = Join-Path $script:ScratchRoot 'defaults.json'
+    [void](Invoke-Native -Arguments @('--config-file', $defaultsPath, 'init') -EvidenceName 'config-defaults-init')
+    $defaults = Get-Content -Raw -LiteralPath $defaultsPath | ConvertFrom-Json
+    $expectedDefaults = @{
+        schemaVersion = 1
+        port = 12987
+        bind = '127.0.0.1'
+        hostname = 'localhost'
+        autoDiscovery = 'none'
+        leaseSeconds = 300
+        maxRegistrations = 1000
+    }
+    Assert-Equal @($defaults.PSObject.Properties).Count $expectedDefaults.Count 'Default configuration has unexpected fields.'
+    foreach ($entry in $expectedDefaults.GetEnumerator()) {
+        Assert-Equal $defaults.($entry.Key) $entry.Value "Unexpected default setting: $($entry.Key)"
+    }
+    Copy-Item -LiteralPath $defaultsPath -Destination (Join-Path $script:EvidenceRoot 'default-config.json')
+
     $relayPort = Get-FreePort
     $overridePort = Get-FreePort
     $callbackPortA = Get-FreePort
@@ -503,7 +521,8 @@ try {
     Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'health.json') -Value $health
 
     $doctorBeforeHash = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
-    $doctor = Invoke-Native -Arguments @('--config-file', $configPath, 'doctor', '--json') -EvidenceName 'doctor-readonly'
+    $doctorServiceName = 'orelay-verify-' + [Guid]::NewGuid().ToString('N')
+    $doctor = Invoke-Native -Arguments @('--config-file', $configPath, 'doctor', '--name', $doctorServiceName, '--json') -EvidenceName 'doctor-readonly'
     Assert-Equal $doctor.ExitCode 0 'Doctor did not report the owned healthy relay.'
     $doctorJson = $doctor.Stdout | ConvertFrom-Json
     Assert-True $doctorJson.healthy 'Doctor reported an unhealthy owned relay.'
