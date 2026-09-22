@@ -18,7 +18,7 @@ public sealed class SystemdServiceManagerTests
         Assert.True(File.Exists(fixture.Request.UnitFilePath));
         var unit = File.ReadAllText(fixture.Request.UnitFilePath);
         Assert.Contains(ServiceIdentity.OwnershipMarker, unit, StringComparison.Ordinal);
-        Assert.Contains("ExecStart=\"", unit, StringComparison.Ordinal);
+        Assert.Contains("ExecStart=:\"", unit, StringComparison.Ordinal);
         Assert.Contains("ORelay State", unit, StringComparison.Ordinal);
         Assert.Contains(runner.Commands, command => command.SequenceEqual(new[] { "daemon-reload" }));
     }
@@ -90,20 +90,15 @@ public sealed class SystemdServiceManagerTests
     }
 
     [Fact]
-    public void WorkingDirectoryPreservesDollarWhileExecStartEscapesIt()
+    public void ExecStartPreservesDollarPathsWithoutEnvironmentExpansion()
     {
         using var fixture = new ServiceFixture(serviceName: ServiceIdentity.DefaultName, includeDollar: true);
 
         var content = SystemdUnitRenderer.Render(fixture.Request);
 
-        Assert.Contains("ExecStart=\"", content, StringComparison.Ordinal);
-        Assert.Contains("$$", content, StringComparison.Ordinal);
-        Assert.Contains("WorkingDirectory=\"", content, StringComparison.Ordinal);
-        var workingDirectory = content
-            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
-            .Single(line => line.StartsWith("WorkingDirectory=", StringComparison.Ordinal));
-        Assert.Contains("$", workingDirectory, StringComparison.Ordinal);
-        Assert.DoesNotContain("$$", workingDirectory, StringComparison.Ordinal);
+        Assert.Contains("ExecStart=:\"", content, StringComparison.Ordinal);
+        Assert.Contains("ORelay$Data", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("$$", content, StringComparison.Ordinal);
     }
 
     private sealed class ServiceFixture : IDisposable

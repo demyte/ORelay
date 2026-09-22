@@ -47,7 +47,9 @@ public sealed class ServiceCommandLineTests
         var command = ServiceCommandLine.BuildSystemdExecStart(request);
 
         Assert.Contains("100%%", command, StringComparison.Ordinal);
-        Assert.Contains("cash$$state", command, StringComparison.Ordinal);
+        Assert.Contains("cash$state", command, StringComparison.Ordinal);
+        Assert.DoesNotContain("cash$$state", command, StringComparison.Ordinal);
+        Assert.StartsWith(":\"", command, StringComparison.Ordinal);
         Assert.Contains("server", command, StringComparison.Ordinal);
     }
 

@@ -81,27 +81,16 @@ public static class ServiceCommandLine
     }
 
     /// <summary>
-    /// Quotes a systemd ExecStart argument. systemd parses this format itself,
-    /// so it needs systemd escapes rather than Windows or shell quoting.
+    /// Quotes an argument for an ExecStart command with the ':' prefix, which
+    /// disables environment expansion. Percent specifiers still need escaping.
     /// </summary>
     public static string QuoteSystemdArgument(string value)
-        => QuoteSystemdValue(value, escapeDollar: true);
-
-    /// <summary>
-    /// Quotes a filesystem path used by a systemd directive such as
-    /// <c>WorkingDirectory</c>. Percent specifiers still need escaping, but
-    /// systemd does not perform ExecStart-style environment expansion here;
-    /// preserve a literal dollar sign in the path.
-    /// </summary>
-    public static string QuoteSystemdPath(string value)
-        => QuoteSystemdValue(value, escapeDollar: false);
-
-    private static string QuoteSystemdValue(string value, bool escapeDollar)
     {
         ArgumentNullException.ThrowIfNull(value);
 
         var builder = new StringBuilder(value.Length + 2);
         builder.Append('"');
+
         foreach (var character in value)
         {
             switch (character)
@@ -124,11 +113,6 @@ public static class ServiceCommandLine
                 case '%':
                     builder.Append("%%");
                     break;
-                case '$':
-                    // systemd expands environment variables in ExecStart. A
-                    // doubled dollar keeps a literal path character.
-                    builder.Append(escapeDollar ? "$$" : "$");
-                    break;
                 default:
                     builder.Append(character);
                     break;
@@ -136,6 +120,7 @@ public static class ServiceCommandLine
         }
 
         builder.Append('"');
+
         return builder.ToString();
     }
 
@@ -145,7 +130,14 @@ public static class ServiceCommandLine
 
         return string.Join(
             ' ',
-            new[] { QuoteSystemdArgument(request.ExecutablePath) }
-                .Concat(BuildArguments(request).Select(QuoteSystemdArgument)));
+            new[]
+            {
+                // A service path is literal data, not a systemd environment
+                // variable. Prefixing the command with ':' disables
+                // ExecStart environment expansion, including for paths such
+                // as "$foo". The same mode keeps configuration arguments
+                // literal without turning '$' into '$$'.
+                ":" + QuoteSystemdArgument(request.ExecutablePath),
+            }.Concat(BuildArguments(request).Select(QuoteSystemdArgument)));
     }
 }

@@ -9,12 +9,6 @@ public static class SystemdUnitRenderer
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var executableDirectory = Path.GetDirectoryName(request.ExecutablePath);
-        if (string.IsNullOrWhiteSpace(executableDirectory))
-        {
-            throw new ArgumentException("The service executable must have a parent directory.", nameof(request));
-        }
-
         var builder = new StringBuilder();
         builder.AppendLine(ServiceIdentity.OwnershipMarker);
         builder.AppendLine("[Unit]");
@@ -27,8 +21,6 @@ public static class SystemdUnitRenderer
         builder.AppendLine("User=root");
         builder.Append("ExecStart=");
         builder.AppendLine(ServiceCommandLine.BuildSystemdExecStart(request));
-        builder.Append("WorkingDirectory=");
-        builder.AppendLine(ServiceCommandLine.QuoteSystemdPath(executableDirectory));
         builder.AppendLine("Restart=on-failure");
         builder.AppendLine("RestartSec=2s");
         builder.AppendLine("KillSignal=SIGTERM");
