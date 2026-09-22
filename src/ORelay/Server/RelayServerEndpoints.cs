@@ -3,6 +3,8 @@ using System.Text.Json.Serialization.Metadata;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ORelay.Server;
 
@@ -56,6 +58,8 @@ public static class RelayServerEndpoints
             options.RelayCallbackUrl);
         if (result.IsSuccess)
         {
+            RelayServerLog.Registered(Logger(context), result.Response!.Id[..8],
+                RelayServerLog.DestinationOrigin(result.Response.CallbackUrl), result.Response.LeaseSeconds);
             return Json(StatusCodes.Status201Created, result.Response!, RelayJsonContext.Default.RegistrationResponse);
         }
 
@@ -86,7 +90,10 @@ public static class RelayServerEndpoints
     {
         // DELETE is deliberately idempotent. It does not reveal whether a
         // previous registration existed or had already expired.
-        registrations.Delete(id ?? string.Empty);
+        if (registrations.Delete(id ?? string.Empty))
+        {
+            RelayServerLog.Removed(Logger(context), id![..8]);
+        }
         SetNoCacheHeaders(context.Response);
         return Results.NoContent();
     }
@@ -133,6 +140,8 @@ public static class RelayServerEndpoints
         SetNoCacheHeaders(context.Response);
         context.Response.StatusCode = StatusCodes.Status302Found;
         context.Response.Headers.Location = location;
+        RelayServerLog.Forwarded(Logger(context), registration.Id[..8],
+            RelayServerLog.DestinationOrigin(registration.CallbackUrl));
         return Results.Empty;
     }
 
@@ -144,9 +153,13 @@ public static class RelayServerEndpoints
 
     private static SourceGeneratedJsonResult<RelayErrorResponse> Error(HttpContext context, int statusCode, string code, string message)
     {
+        RelayServerLog.Rejected(Logger(context), code, statusCode);
         SetNoCacheHeaders(context.Response);
         return Json(statusCode, new RelayErrorResponse(code, message), RelayJsonContext.Default.RelayErrorResponse);
     }
+
+    private static ILogger Logger(HttpContext context) =>
+        context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(RelayServerLog.Category);
 
     private static SourceGeneratedJsonResult<T> Json<T>(int statusCode, T value, JsonTypeInfo<T> typeInfo) =>
         new SourceGeneratedJsonResult<T>(statusCode, value, typeInfo);

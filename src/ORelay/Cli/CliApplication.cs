@@ -106,6 +106,10 @@ public static class CliApplication
                 break;
             case CliCommand.Server:
                 AppendSettingsHelp(builder, "orelay server", "Run the relay in the foreground using the effective configuration.");
+                builder.AppendLine("Logs go to stderr with timestamps and coloured levels in a terminal.");
+                builder.AppendLine("Set NO_COLOR=1 to disable colour. Redirected logs are plain text.");
+                builder.AppendLine("--json writes startup JSON to stdout and JSON logs to stderr.");
+                builder.AppendLine();
                 builder.AppendLine("Example:");
                 builder.AppendLine("  orelay server --bind 127.0.0.1 --port 12987");
                 break;

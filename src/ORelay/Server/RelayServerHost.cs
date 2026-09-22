@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Console;
 using ORelay.Configuration;
 using ORelay.Services;
 
@@ -50,22 +51,38 @@ public static class RelayServerHost
             Args = Array.Empty<string>(),
             ContentRootPath = AppContext.BaseDirectory,
         });
-        // The default hosting request logs can include the full request target.
-        // Callback queries carry authorization codes and state, so keep the
-        // framework below warning level for this service.
+        // Framework request logs can include OAuth values. Enable informational
+        // output only for our own messages, which never include callback queries.
+        builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        builder.Logging.AddFilter(RelayServerLog.Category, LogLevel.Information);
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
         builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
+        builder.Services.Configure<ConsoleLoggerOptions>(console =>
+            console.LogToStandardErrorThreshold = LogLevel.Trace);
         if (jsonOutput)
         {
-            builder.Logging.ClearProviders();
-            builder.Logging.AddJsonConsole();
+            builder.Logging.AddJsonConsole(console => console.TimestampFormat = "yyyy-MM-ddTHH:mm:sszzz");
+        }
+        else
+        {
+            builder.Logging.AddSimpleConsole(console =>
+            {
+                console.SingleLine = true;
+                console.TimestampFormat = "HH:mm:ss ";
+                console.ColorBehavior = !Console.IsErrorRedirected &&
+                    string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")) &&
+                    !string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)
+                        ? LoggerColorBehavior.Enabled
+                        : LoggerColorBehavior.Disabled;
+            });
         }
         builder.Host.UseORelayServiceLifetime(serviceName);
         builder.WebHost.UseUrls($"http://{FormatBind(effectiveSettings.Bind)}:{effectiveSettings.Port}");
         builder.Services.AddRelayServer(options);
 
         await using var app = builder.Build();
+        var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(RelayServerLog.Category);
         app.MapRelayEndpoints(
             app.Services.GetRequiredService<RegistrationStore>(),
             options);
@@ -80,11 +97,9 @@ public static class RelayServerHost
         {
             Console.Out.WriteLine(JsonSerializer.Serialize(ready, RelayJsonContext.Default.RelayServerReadyResponse));
         }
-        else
-        {
-            Console.Error.WriteLine(
-                $"orelay listening on {effectiveSettings.Bind}:{effectiveSettings.Port}; callback {options.RelayCallbackUrl}");
-        }
+        RelayServerLog.Listening(logger,
+            $"http://{FormatBind(effectiveSettings.Bind)}:{effectiveSettings.Port}", options.RelayCallbackUrl);
+        using var stoppingRegistration = app.Lifetime.ApplicationStopping.Register(() => RelayServerLog.Stopping(logger));
         await app.WaitForShutdownAsync(cancellationToken).ConfigureAwait(false);
         return 0;
     }

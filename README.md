@@ -29,6 +29,8 @@ orelay --config-file /data/orelay.json server
 
 Run `orelay --help` or append `--help` to a command. Commands run without interactive prompts. [CLI reference](docs/cli.md) covers settings, JSON output, exit codes, and services.
 
+Server logs show timestamps and coloured levels for startup, registrations, callback routing, rejections, and shutdown. They go to stderr, with plain text when redirected. Set `NO_COLOR=1` to disable colour in a terminal, or use `server --json` for JSON logs. Callback state, codes, and provider error values are never included.
+
 ## Register a worktree
 
 Send `POST /registrations` with an exact HTTP or HTTPS destination:

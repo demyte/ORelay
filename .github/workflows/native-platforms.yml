@@ -144,6 +144,19 @@ jobs:
             -HideRuntimeForProof
           if ($LASTEXITCODE -ne 0) { throw "Native smoke failed with exit code $LASTEXITCODE." }
 
+      - name: Exercise server console logging
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/logging-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID
+          if ($LASTEXITCODE -ne 0) { throw "Logging smoke failed with exit code $LASTEXITCODE." }
+
       - name: Exercise installed service lifecycle (x64)
         if: matrix.rid == 'win-x64' || matrix.rid == 'linux-x64'
         shell: pwsh

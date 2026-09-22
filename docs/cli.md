@@ -51,6 +51,10 @@ A wildcard bind needs a usable advertised address. A bind address controls liste
 
 Stop the foreground process with Ctrl+C. A restart discards in-memory registrations. The relay never persists codes or tokens, and normal server logs omit callback query values.
 
+Server logs go to stderr. Each line has a local timestamp and a level, coloured in an interactive terminal. Registration and callback messages identify a worktree by the first eight characters of its registration ID and its destination origin, such as `http://localhost:5017`. Destination paths and callback query values are omitted. Health probes and successful lease renewals stay quiet.
+
+Redirecting stderr produces plain text without colour codes. Set `NO_COLOR=1` or `TERM=dumb` to disable colour in a terminal. With `server --json`, stdout contains the startup readiness object and stderr contains one JSON object per log event. Colour is disabled in JSON mode.
+
 ## Doctor
 
 ```text
