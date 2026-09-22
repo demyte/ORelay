@@ -57,6 +57,7 @@ public interface IWindowsServiceBackend
 public sealed class WindowsServiceManager : IPlatformServiceManager
 {
     private static readonly TimeSpan DefaultOperationTimeout = TimeSpan.FromSeconds(30);
+    private const int ErrorServiceNeverStarted = 1077;
     private readonly IWindowsServiceBackend _backend;
     private readonly TimeSpan _operationTimeout;
 
@@ -358,7 +359,9 @@ public sealed class WindowsServiceManager : IPlatformServiceManager
         string.Equals(definition.BinaryPathName.Trim(), expectedBinaryPath.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private static ServiceState EffectiveState(WindowsServiceDefinition definition) =>
-        definition.State == ServiceState.Stopped && definition.Win32ExitCode != 0
+        definition.State == ServiceState.Stopped &&
+        definition.Win32ExitCode != 0 &&
+        definition.Win32ExitCode != ErrorServiceNeverStarted
             ? ServiceState.Failed
             : definition.State;
 

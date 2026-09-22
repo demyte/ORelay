@@ -63,6 +63,27 @@ public sealed class WindowsServiceManagerTests
     }
 
     [Fact]
+    public void NeverStartedServiceIsReportedAsStopped()
+    {
+        using var fixture = new ServiceFixture();
+        var backend = new FakeWindowsServiceBackend
+        {
+            Definition = new WindowsServiceDefinition(
+                ServiceCommandLine.BuildWindows(fixture.Request),
+                ServiceState.Stopped,
+                1077),
+        };
+        var manager = new WindowsServiceManager(backend);
+
+        var result = manager.Execute(ServiceOperation.Status, fixture.Request);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(ServiceState.Stopped, result.State);
+        Assert.True(result.Owned);
+        Assert.Null(result.ErrorCode);
+    }
+
+    [Fact]
     public void UninstallLeavesTheConfigurationFileInPlace()
     {
         using var fixture = new ServiceFixture();
