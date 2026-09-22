@@ -148,7 +148,7 @@ foreach ($mode in @('default', 'json')) {
             $stdoutLines = @(Get-Lines $stdoutPath)
             if ($stdoutLines.Count -ne 1) { throw 'JSON server stdout did not contain exactly one readiness object.' }
             $ready = $stdoutLines[0] | ConvertFrom-Json
-            if ($ready.identity -ne 'orelay' -or $ready.port -ne $port -or $ready.relayCallbackUrl -ne "http://127.0.0.1:$port/callback") { throw 'JSON readiness object did not identify the owned relay.' }
+            if ($ready.identity -ne 'orelay' -or $ready.port -ne $port -or $ready.relayCallbackUrl -ne "http://localhost:$port/callback") { throw 'JSON readiness object did not identify the owned relay.' }
             foreach ($line in $lines) {
                 $record = $line | ConvertFrom-Json
                 if ($null -eq $record.Message -or $record.PSObject.Properties.Name -notcontains 'LogLevel') { throw 'JSON stderr contained a non-log record.' }
