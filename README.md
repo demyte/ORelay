@@ -1,6 +1,6 @@
 # ORelay
 
-ORelay routes OAuth 2 authorization callbacks to development worktrees. Register one fixed callback URL with a provider such as Xero, then run any number of worktrees on different ports. Each worktree gets its own temporary registration ID.
+ORelay routes OAuth 2 authorization callbacks to development worktrees. Register one fixed callback URL with a provider such as Xero, then run multiple worktrees on different ports. Each worktree gets its own temporary registration ID.
 
 ```text
 Provider → ORelay /callback → browser redirect → the registered worktree
@@ -50,6 +50,8 @@ When the provider redirects to ORelay, it forwards the complete query unchanged,
 | `GET /health` | Read the relay identity and health. |
 
 Registrations exist only in memory. The default lease is five minutes. Renew before expiry and deregister on shutdown. Lease expiry removes registrations left by crashed processes. Restarting ORelay loses every registration; affected applications need a fresh registration, and pending OAuth flows must start again.
+
+See the [HTTP and state contract](docs/protocol.md) for request and response fields, state bounds, destination restrictions, and errors.
 
 ## Aspire
 
