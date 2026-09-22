@@ -52,6 +52,10 @@ When creating or updating a GitHub issue, pull request description, or comment, 
 
 ## Agent skills
 
+### Releases
+
+Use `.agents/skills/release-orelay/SKILL.md` only when the user explicitly invokes `$release-orelay`. It accepts `patch`, `minor`, or `major`; without a release part, it asks. Do not invoke it automatically.
+
 ### Issue tracker
 
 Specs and tickets live as tracked Markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
