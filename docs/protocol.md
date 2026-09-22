@@ -24,6 +24,8 @@ The destination must be an absolute HTTP or HTTPS URL of at most 2048 characters
 
 Send `PUT /registrations/{id}/lease` without a body to renew a live registration. HTTP `200` returns the same fields with a new expiry. Renew before expiry, allowing for network latency. Renewal cannot restore an expired registration. The default lease lasts 300 seconds and the default capacity is 1000 registrations; both are configurable.
 
+An entry is expired when the relay's current time is equal to or later than `expiresAt`. Registry operations are atomic; a callback already accepted for routing can finish its redirect while another operation deletes the entry. A crashed worktree's lease can remain live until expiry. The Aspire package renews every third of a lease, capped at 60 seconds, and bounds retries by the remaining lease.
+
 Send `DELETE /registrations/{id}` to deregister. HTTP `204` is returned even when the ID is already absent. All registrations disappear when the relay process stops. Applications obtain a new registration after an explicit restart and begin pending authorization flows again.
 
 ## Callback state

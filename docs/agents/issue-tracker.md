@@ -8,6 +8,7 @@ ORelay uses local Markdown for specs and tickets. Keep these files in Git so oth
 - Write its spec at `.scratch/<feature-slug>/spec.md`.
 - Write one file per implementation ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`. Do not combine tickets into one file.
 - Record the triage label in a `Status:` line near the top. Use the labels in `docs/agents/triage-labels.md`.
+- After delivering and verifying an implementation ticket, replace its triage status with the terminal lifecycle value `resolved`, check its completed acceptance criteria, and append delivery evidence. An unmet requirement keeps the ticket open unless James explicitly accepts a scope change.
 - Append comments and conversation history under `## Comments` at the bottom of the file.
 - Treat these files as project records, not disposable temporary files.
 

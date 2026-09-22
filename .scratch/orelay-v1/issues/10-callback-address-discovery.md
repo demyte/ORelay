@@ -1,6 +1,6 @@
 # 10: Discover worktree callback addresses with explicit overrides
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: [06: Register a real Aspire application using the hosting NuGet package](06-aspire-hosting-package.md), [09: Run a shared relay with explicit network configuration](09-shared-relay-networking.md).
 
@@ -10,14 +10,14 @@ Parent: [ORelay v1 specification](../spec.md#networking-and-discovery)
 
 ## Acceptance criteria
 
-- [ ] Define the supported discovery modes and explicit URL/hostname overrides in the CLI and hosting package. Full explicit URLs take precedence; document how hostname overrides combine with an actual endpoint's scheme, port, and path.
-- [ ] Resolve local callbacks from the resource's allocated endpoint and configured path. Preserve correct URI construction for hostnames, IPv4, and IPv6 rather than concatenating ambiguous address strings.
-- [ ] Optional Tailscale discovery runs on the destination application's host and uses its actual endpoint details. A central relay does not substitute its own interface information for a remote worktree's address.
-- [ ] Keep relay-server advertised settings separate from per-worktree discovery inputs. Apply persistence and invocation precedence consistently for settings owned by the CLI.
-- [ ] Ordinary local mode works without Tailscale. Missing tools, unavailable daemon state, unsupported status data, and ambiguous candidates produce actionable failures or candidates with an explicit override path; they do not select a guessed destination silently.
-- [ ] Detect or explain incompatible application bindings, including a remotely advertised hostname for a loopback-only listener. Selecting a host must not implicitly change the application's network exposure.
-- [ ] The exact resolved destination is subject to the relay's approved policy before registration. Diagnostics distinguish local discovery, any network probes, and actual browser reachability.
-- [ ] Document examples and JSON result/error behavior. Extend focused discovery tests and the live verification map, preserving the callback query and worktree state contract.
+- [x] Define the supported discovery modes and explicit URL/hostname overrides in the CLI and hosting package. Full explicit URLs take precedence; document how hostname overrides combine with an actual endpoint's scheme, port, and path.
+- [x] Resolve local callbacks from the resource's allocated endpoint and configured path. Preserve correct URI construction for hostnames, IPv4, and IPv6 rather than concatenating ambiguous address strings.
+- [x] Optional Tailscale discovery runs on the destination application's host and uses its actual endpoint details. A central relay does not substitute its own interface information for a remote worktree's address.
+- [x] Keep relay-server advertised settings separate from per-worktree discovery inputs. Apply persistence and invocation precedence consistently for settings owned by the CLI.
+- [x] Ordinary local mode works without Tailscale. Missing tools, unavailable daemon state, unsupported status data, and ambiguous candidates produce actionable failures or candidates with an explicit override path; they do not select a guessed destination silently.
+- [x] Detect or explain incompatible application bindings, including a remotely advertised hostname for a loopback-only listener. Selecting a host must not implicitly change the application's network exposure.
+- [x] The exact resolved destination is subject to the relay's approved policy before registration. Diagnostics distinguish local discovery, any network probes, and actual browser reachability.
+- [x] Document examples and JSON result/error behavior. Extend focused discovery tests and the live verification map, preserving the callback query and worktree state contract.
 
 ## Verification
 
@@ -26,3 +26,9 @@ Exercise a local Aspire endpoint, an explicit full URL, a hostname override, and
 ## Scope
 
 Discovery selects and explains addresses. It does not install Tailscale, configure network adapters or firewalls, register URLs with providers, or guarantee reachability from an untested browser.
+
+## Delivery
+
+Completed and reviewed on 2026-09-22. The CLI and Aspire package separate relay advertisement from worktree callback discovery, with explicit URL/hostname precedence and actual allocated endpoint details. Real Tailscale discovery was exercised; a remote host lacking MagicDNS resolution completed callbacks using the documented IP hostname override. Evidence: `root-remote-042b7b4f`, retained failed DNS attempt `root-remote-ce099b06`, packed AppHost tests, and focused process-boundary discovery tests.
+
+Local evidence paths above are relative to `.artifacts/verification/`. See [implementation evidence](../implementation-progress.md) and [native CI](https://github.com/demyte/ORelay/actions/runs/35713463965), verified at commit 5ffda0393eb41ab001ffffcbaacb9c56efdc26f9.

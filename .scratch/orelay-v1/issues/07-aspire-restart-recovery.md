@@ -1,6 +1,6 @@
 # 07: Recover predictably from Aspire and relay restarts
 
-Status: ready-for-agent
+Status: resolved
 
 Blocked by: [06: Register a real Aspire application using the hosting NuGet package](06-aspire-hosting-package.md).
 
@@ -10,13 +10,13 @@ Parent: [ORelay v1 specification](../spec.md#aspire-package-and-recovery)
 
 ## Acceptance criteria
 
-- [ ] Implement the recorded decision in ticket 05. If it requires a restart, expose that requirement and an actionable recovery step. If it uses dynamic registration data, prove the running application consumes the new ID through that mechanism.
-- [ ] Distinguish temporary connection failures from an unknown or expired registration. Apply the agreed bounded retries and cancellation; failures must not create uncontrolled repeated registrations.
-- [ ] Relay restart or lease loss produces the documented visible degraded state. Recovery cannot silently leave the application constructing new flows with an obsolete ID.
-- [ ] Resource restart registers its current allocated destination with a new session identity. Old callbacks cannot be routed by retargeting the previous registration to the new destination.
-- [ ] Pending old flows fail as documented. The worktree's full-state validation remains in force, and recovery does not imply preservation of in-flight flows across relay registry loss.
-- [ ] A resource stop or AppHost shutdown cancels renewal and recovery. Late responses and retries cannot resurrect its registration or affect another AppHost's entry.
-- [ ] Update package documentation, the sample, focused lifecycle tests, and live verification recipes to reflect the behavior actually proved. Keep the executable's independent lifecycle intact.
+- [x] Implement the recorded decision in ticket 05. If it requires a restart, expose that requirement and an actionable recovery step. If it uses dynamic registration data, prove the running application consumes the new ID through that mechanism.
+- [x] Distinguish temporary connection failures from an unknown or expired registration. Apply the agreed bounded retries and cancellation; failures must not create uncontrolled repeated registrations.
+- [x] Relay restart or lease loss produces the documented visible degraded state. Recovery cannot silently leave the application constructing new flows with an obsolete ID.
+- [x] Resource restart registers its current allocated destination with a new session identity. Old callbacks cannot be routed by retargeting the previous registration to the new destination.
+- [x] Pending old flows fail as documented. The worktree's full-state validation remains in force, and recovery does not imply preservation of in-flight flows across relay registry loss.
+- [x] A resource stop or AppHost shutdown cancels renewal and recovery. Late responses and retries cannot resurrect its registration or affect another AppHost's entry.
+- [x] Update package documentation, the sample, focused lifecycle tests, and live verification recipes to reflect the behavior actually proved. Keep the executable's independent lifecycle intact.
 
 ## Verification
 
@@ -25,3 +25,9 @@ Drive an authorization flow while interrupting and restoring the owned relay. Se
 ## Scope
 
 The chosen contract governs this ticket. Do not add a persistent registry, an unapproved runtime package, or automatic application restarts to make recovery appear seamless.
+
+## Delivery
+
+Completed and reviewed on 2026-09-22. Registration loss reports degraded/restart-required health. Bounded retries stop at the lease deadline; explicit resource/AppHost restart supplies a fresh ID. Real relay restart, AppHost crash, reused/changed API ports, pending-flow rejection, and isolation were exercised. Evidence: `root-aspire-fe7a88d7` and `aspire-crash`.
+
+Local evidence paths above are relative to `.artifacts/verification/`. See [implementation evidence](../implementation-progress.md) and [native CI](https://github.com/demyte/ORelay/actions/runs/35713463965), verified at commit 5ffda0393eb41ab001ffffcbaacb9c56efdc26f9.

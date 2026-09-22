@@ -10,7 +10,7 @@ The worktree validates state and exchanges the authorization code directly with 
 
 ## Run
 
-ORelay is a .NET 10 application published as a self-contained Native AOT executable. The published executable runs without installing .NET. See [native builds and platform verification](docs/native-platforms.md) for the platform matrix and build prerequisites. Packages and public releases have not been published.
+ORelay is a .NET 10 application published as a self-contained Native AOT executable. The published executable runs without installing .NET. See the [v1 handoff](docs/v1-handoff.md) for verified build artifacts and package status, and [native builds and platform verification](docs/native-platforms.md) for the platform matrix and build prerequisites. Packages and public releases have not been published.
 
 ```text
 orelay init
