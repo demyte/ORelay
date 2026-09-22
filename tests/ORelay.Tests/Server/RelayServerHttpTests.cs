@@ -37,6 +37,14 @@ public sealed class RelayServerHttpTests
         Assert.Equal(server.Options.RelayCallbackUrl, registration.RelayCallbackUrl);
         Assert.Equal(server.Options.LeaseSeconds, registration.LeaseSeconds);
 
+        using var duplicateState = await client.GetAsync(
+            $"/callback?state={registration.Id}.opaque&state={registration.Id}.other&sentinel=duplicate-state-secret");
+        Assert.Equal(HttpStatusCode.BadRequest, duplicateState.StatusCode);
+        Assert.Null(duplicateState.Headers.Location);
+        var duplicateStateBody = await duplicateState.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_routing_state", duplicateStateBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("duplicate-state-secret", duplicateStateBody, StringComparison.Ordinal);
+
         using var health = await client.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
         var healthBody = await JsonSerializer.DeserializeAsync<RelayHealthResponse>(
