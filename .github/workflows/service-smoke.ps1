@@ -35,7 +35,9 @@ function Invoke-ProcessWithEvidence {
         [string[]]$Arguments,
 
         [Parameter(Mandatory = $true)]
-        [string]$EvidenceName
+        [string]$EvidenceName,
+
+        [System.Management.Automation.PSCredential]$Credential
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -45,6 +47,23 @@ function Invoke-ProcessWithEvidence {
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
+    if ($null -ne $Credential) {
+        if (-not $IsWindows) {
+            throw 'Credential-backed service proof is supported only on Windows.'
+        }
+
+        $credentialParts = $Credential.UserName.Split('\', 2)
+        if ($credentialParts.Count -eq 2) {
+            $startInfo.Domain = $credentialParts[0]
+            $startInfo.UserName = $credentialParts[1]
+        }
+        else {
+            $startInfo.Domain = '.'
+            $startInfo.UserName = $Credential.UserName
+        }
+        $startInfo.Password = $Credential.Password
+        $startInfo.LoadUserProfile = $false
+    }
     foreach ($argument in $Arguments) {
         [void]$startInfo.ArgumentList.Add($argument)
     }
@@ -117,6 +136,305 @@ function Invoke-PrivilegedProcess {
     }
 
     return Invoke-ProcessWithEvidence -FilePath $FilePath -Arguments $Arguments -EvidenceName $EvidenceName
+}
+
+function Capture-ServiceFailureDiagnostics {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $records = [System.Collections.Generic.List[object]]::new()
+    if ($script:IsLinuxPlatform) {
+        $unitPath = $script:UnitPath
+        try {
+            if (Test-Path -LiteralPath $unitPath -PathType Leaf) {
+                Get-Content -LiteralPath $unitPath |
+                    Set-Content -LiteralPath (Join-Path $script:EvidencePath 'service-failure-unit.service')
+                $records.Add([pscustomobject]@{
+                        Kind = 'unit-file'
+                        Path = $unitPath
+                        Evidence = 'service-failure-unit.service'
+                    })
+            }
+            else {
+                $records.Add([pscustomobject]@{
+                        Kind = 'unit-file'
+                        Path = $unitPath
+                        Missing = $true
+                    })
+            }
+        }
+        catch {
+            $records.Add([pscustomobject]@{
+                    Kind = 'unit-file'
+                    Path = $unitPath
+                    Error = $_.Exception.Message
+                })
+        }
+
+        $commands = @(
+            @('show', "$Name.service", '--no-page', '--property=LoadState,ActiveState,SubState,Result,ExecMainStatus,ExecStart', 'service-failure-systemctl-show'),
+            @('status', "$Name.service", '--no-pager', '--full', 'service-failure-systemctl-status'),
+            @('-u', "$Name.service", '--no-pager', '--no-hostname', '-n', '100', '--since=-5min', 'service-failure-journal')
+        )
+        foreach ($command in $commands) {
+            $evidenceName = $command[-1]
+            $arguments = [string[]]$command[0..($command.Count - 2)]
+            try {
+                $result = Invoke-PrivilegedProcess -FilePath $(if ($evidenceName -eq 'service-failure-journal') { 'journalctl' } else { 'systemctl' }) `
+                    -Arguments $arguments -EvidenceName $evidenceName
+                $records.Add([pscustomobject]@{
+                        Kind = 'command'
+                        FilePath = if ($evidenceName -eq 'service-failure-journal') { 'journalctl' } else { 'systemctl' }
+                        Arguments = $arguments
+                        Evidence = @("$evidenceName.stdout.txt", "$evidenceName.stderr.txt")
+                        ExitCode = $result.ExitCode
+                    })
+            }
+            catch {
+                $records.Add([pscustomobject]@{
+                        Kind = 'command'
+                        FilePath = if ($evidenceName -eq 'service-failure-journal') { 'journalctl' } else { 'systemctl' }
+                        Arguments = $arguments
+                        Error = $_.Exception.Message
+                    })
+            }
+        }
+    }
+    else {
+        $scPath = Join-Path $env:SystemRoot 'System32\sc.exe'
+        foreach ($command in @(
+                @('qc', $Name, 'service-failure-sc-qc'),
+                @('queryex', $Name, 'service-failure-sc-queryex')
+            )) {
+            $evidenceName = $command[-1]
+            $arguments = [string[]]$command[0..($command.Count - 2)]
+            try {
+                $result = Invoke-ProcessWithEvidence -FilePath $scPath -Arguments $arguments -EvidenceName $evidenceName
+                $records.Add([pscustomobject]@{
+                        Kind = 'command'
+                        FilePath = $scPath
+                        Arguments = $arguments
+                        Evidence = @("$evidenceName.stdout.txt", "$evidenceName.stderr.txt")
+                        ExitCode = $result.ExitCode
+                    })
+            }
+            catch {
+                $records.Add([pscustomobject]@{
+                        Kind = 'command'
+                        FilePath = $scPath
+                        Arguments = $arguments
+                        Error = $_.Exception.Message
+                    })
+            }
+        }
+    }
+
+    Write-ServiceEvidence -Name 'service-failure-diagnostics.json' -Value ([ordered]@{
+            ServiceName = $Name
+            Rid = $Rid
+            CapturedBeforeCleanup = $true
+            Records = $records
+    })
+}
+
+function Invoke-LinuxUnprivilegedInstallProof {
+    if (-not $script:IsLinuxPlatform) {
+        return
+    }
+    if ($script:IsRootUser) {
+        Write-ServiceEvidence -Name 'service-unprivileged-install.json' -Value ([ordered]@{
+                Skipped = $true
+                Reason = 'The runner account is root; an unprivileged install proof would be invalid.'
+            })
+        return
+    }
+
+    $result = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        'service'
+        'install'
+        '--name'
+        $script:UnprivilegedServiceName
+        '--config-file'
+        $script:ConfigPath
+        '--json'
+    ) -EvidenceName 'service-unprivileged-install'
+    $payload = $null
+    try {
+        $payload = $result.StandardOutput | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "The unprivileged Linux service install did not return JSON: $($_.Exception.Message)"
+    }
+
+    Write-ServiceEvidence -Name 'service-unprivileged-install.json' -Value ([ordered]@{
+            ExpectedErrorCode = 'PermissionDenied'
+            ExitCode = $result.ExitCode
+            Result = $payload
+            StandardOutput = $result.StandardOutput
+            StandardError = $result.StandardError
+        })
+    $unitCreated = Test-Path -LiteralPath $script:UnprivilegedUnitPath -PathType Leaf
+    if ($unitCreated) {
+        $script:UnprivilegedUnitCreated = $true
+    }
+    if ($result.ExitCode -ne 3 -or $payload.succeeded -or
+        "$($payload.errorCode)" -cne 'PermissionDenied') {
+        throw 'An unprivileged Linux service install did not return PermissionDenied.'
+    }
+    if ($unitCreated) {
+        throw "An unprivileged Linux service install created a unit: '$($script:UnprivilegedUnitPath)'."
+    }
+}
+
+function Invoke-WindowsUnprivilegedInstallProof {
+    if (-not $IsWindows) {
+        return
+    }
+    if ($env:GITHUB_ACTIONS -ne 'true') {
+        Write-ServiceEvidence -Name 'service-unprivileged-install.json' -Value ([ordered]@{
+                Skipped = $true
+                Reason = 'The disposable Windows account proof is restricted to GitHub Actions.'
+            })
+        return
+    }
+
+    $accountName = 'orelayu' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    $passwordText = 'Orelay-' + [Guid]::NewGuid().ToString('N') + 'a1!'
+    $accountCreated = $false
+    $securePassword = $null
+    $credential = $null
+    $proofError = $null
+    $accountCleanupError = $null
+    $accountAclGranted = $false
+    try {
+        $securePassword = ConvertTo-SecureString -String $passwordText -AsPlainText -Force
+        New-LocalUser -Name $accountName -Password $securePassword -AccountNeverExpires `
+            -PasswordNeverExpires -UserMayNotChangePassword -Description 'Temporary ORelay CI service proof account.' |
+            Out-Null
+        $accountCreated = $true
+        $usersGroup = Get-LocalGroup -SID 'S-1-5-32-545' -ErrorAction Stop
+        Add-LocalGroupMember -Group $usersGroup.Name -Member $accountName -ErrorAction Stop
+        $icaclsPath = Join-Path $env:SystemRoot 'System32\icacls.exe'
+        $accountAclGranted = $true
+        $aclGrant = Invoke-ProcessWithEvidence -FilePath $icaclsPath -Arguments @(
+            $script:WorkPath
+            '/grant:r'
+            "${accountName}:(OI)(CI)M"
+            '/T'
+            '/C'
+        ) -EvidenceName 'service-unprivileged-acl-grant'
+        if ($aclGrant.ExitCode -ne 0) {
+            throw "Could not grant the temporary proof account access to the run-owned scratch path."
+        }
+        $credential = [System.Management.Automation.PSCredential]::new($accountName, $securePassword)
+        $result = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+            'service'
+            'install'
+            '--name'
+            $script:UnprivilegedServiceName
+            '--config-file'
+            $script:ConfigPath
+            '--json'
+        ) -EvidenceName 'service-unprivileged-install' -Credential $credential
+
+        $payload = $null
+        try {
+            $payload = $result.StandardOutput | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw "The unprivileged Windows service install did not return JSON: $($_.Exception.Message)"
+        }
+
+        $scPath = Join-Path $env:SystemRoot 'System32\sc.exe'
+        $serviceQuery = Invoke-ProcessWithEvidence -FilePath $scPath -Arguments @('query', $script:UnprivilegedServiceName) `
+            -EvidenceName 'service-unprivileged-query'
+        Write-ServiceEvidence -Name 'service-unprivileged-install.json' -Value ([ordered]@{
+                AccountName = $accountName
+                ExpectedErrorCode = 'PermissionDenied'
+                ExpectedExitCode = 3
+                ExitCode = $result.ExitCode
+                Result = $payload
+                ServiceQueryExitCode = $serviceQuery.ExitCode
+                StandardOutput = $result.StandardOutput
+                StandardError = $result.StandardError
+            })
+        $serviceCreated = $serviceQuery.ExitCode -eq 0
+        if ($serviceCreated) {
+            $script:UnprivilegedServiceCreated = $true
+        }
+        if ($result.ExitCode -ne 3 -or $payload.succeeded -or
+            "$($payload.errorCode)" -cne 'PermissionDenied') {
+            throw 'An unprivileged Windows service install did not return PermissionDenied with exit code 3.'
+        }
+        if ($serviceQuery.ExitCode -ne 1060) {
+            if ($serviceCreated) {
+                throw "An unprivileged Windows service install created service '$($script:UnprivilegedServiceName)'."
+            }
+            throw "The unprivileged Windows service absence check returned SCM exit code $($serviceQuery.ExitCode), expected 1060."
+        }
+    }
+    catch {
+        $proofError = $_.Exception
+    }
+    finally {
+        $passwordText = $null
+        $securePassword = $null
+        $credential = $null
+        if ($accountAclGranted) {
+            try {
+                $icaclsPath = Join-Path $env:SystemRoot 'System32\icacls.exe'
+                $aclRemove = Invoke-ProcessWithEvidence -FilePath $icaclsPath -Arguments @(
+                    $script:WorkPath
+                    '/remove'
+                    $accountName
+                    '/T'
+                    '/C'
+                ) -EvidenceName 'service-unprivileged-acl-remove'
+                if ($aclRemove.ExitCode -ne 0) {
+                    throw 'Could not remove the temporary proof account ACL.'
+                }
+            }
+            catch {
+                $accountCleanupError = $_.Exception
+                Write-ServiceEvidence -Name 'service-unprivileged-acl-cleanup.json' -Value ([ordered]@{
+                        AccountName = $accountName
+                        Removed = $false
+                        Error = $_.Exception.Message
+                    })
+            }
+        }
+        if ($accountCreated) {
+            try {
+                Remove-LocalUser -Name $accountName -Confirm:$false -ErrorAction Stop
+                Write-ServiceEvidence -Name 'service-unprivileged-account-cleanup.json' -Value ([ordered]@{
+                        AccountName = $accountName
+                        Removed = $true
+                    })
+            }
+            catch {
+                if ($null -eq $accountCleanupError) {
+                    $accountCleanupError = $_.Exception
+                }
+                Write-ServiceEvidence -Name 'service-unprivileged-account-cleanup.json' -Value ([ordered]@{
+                        AccountName = $accountName
+                        Removed = $false
+                        Error = $_.Exception.Message
+                    })
+            }
+        }
+    }
+    if ($null -ne $accountCleanupError) {
+        if ($null -ne $proofError) {
+            Write-Warning "Windows unprivileged proof failed and account cleanup also failed: $($accountCleanupError.Message)"
+            throw $proofError
+        }
+        throw $accountCleanupError
+    }
+    if ($null -ne $proofError) {
+        throw $proofError
+    }
 }
 
 function Invoke-ServiceAction {
@@ -461,6 +779,21 @@ else {
 }
 $serviceName = "orelay-ci-$([Guid]::NewGuid().ToString('N'))"
 $conflictName = "orelay-ci-conflict-$([Guid]::NewGuid().ToString('N'))"
+$script:UnprivilegedServiceName = "orelay-ci-unprivileged-$([Guid]::NewGuid().ToString('N'))"
+$script:UnitPath = if ($script:IsLinuxPlatform) {
+    Join-Path ([System.IO.Path]::DirectorySeparatorChar.ToString()) "etc/systemd/system/$serviceName.service"
+}
+else {
+    $null
+}
+$script:UnprivilegedUnitPath = if ($script:IsLinuxPlatform) {
+    Join-Path ([System.IO.Path]::DirectorySeparatorChar.ToString()) "etc/systemd/system/$($script:UnprivilegedServiceName).service"
+}
+else {
+    $null
+}
+$script:UnprivilegedUnitCreated = $false
+$script:UnprivilegedServiceCreated = $false
 $ownedServiceInstalled = $false
 $ownedServiceWasInstalled = $false
 $ownedServiceCleanupAttempted = $false
@@ -486,6 +819,7 @@ Write-ServiceEvidence -Name 'service-environment.json' -Value ([ordered]@{
         ConfigPath = $script:ConfigPath
         ServiceName = $serviceName
         ConflictName = $conflictName
+        UnprivilegedServiceName = $script:UnprivilegedServiceName
     })
 
 try {
@@ -499,6 +833,9 @@ try {
     if ($init.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) {
         throw "Selected service configuration could not be initialized. Exit code $($init.ExitCode)."
     }
+
+    Invoke-LinuxUnprivilegedInstallProof
+    Invoke-WindowsUnprivilegedInstallProof
 
     $unownedDefinition = Join-Path $script:WorkPath 'unowned service definition'
     if ($script:IsLinuxPlatform) {
@@ -624,6 +961,15 @@ try {
 }
 catch {
     $script:PrimaryError = $_.Exception
+    try {
+        Capture-ServiceFailureDiagnostics -Name $serviceName
+    }
+    catch {
+        Write-ServiceEvidence -Name 'service-failure-diagnostics-error.json' -Value ([ordered]@{
+                ServiceName = $serviceName
+                Error = $_.Exception.Message
+            })
+    }
     throw
 }
 finally {
@@ -690,6 +1036,47 @@ finally {
             }
         }
         catch {
+        }
+    }
+    if ($script:UnprivilegedUnitCreated) {
+        try {
+            [void](Invoke-PrivilegedProcess -FilePath 'rm' -Arguments @('-f', $script:UnprivilegedUnitPath) -EvidenceName 'service-unprivileged-final-remove')
+            [void](Invoke-PrivilegedProcess -FilePath 'systemctl' -Arguments @('daemon-reload') -EvidenceName 'service-unprivileged-final-daemon-reload')
+        }
+        catch {
+        }
+    }
+    if ($script:UnprivilegedServiceCreated) {
+        try {
+            [void](Invoke-ServiceAction -Action stop -Name $script:UnprivilegedServiceName)
+        }
+        catch {
+            if ($null -eq $cleanupError) {
+                $cleanupError = "Unprivileged service stop cleanup failed: $($_.Exception.Message)"
+            }
+        }
+        try {
+            [void](Invoke-ServiceAction -Action uninstall -Name $script:UnprivilegedServiceName)
+        }
+        catch {
+            if ($null -eq $cleanupError) {
+                $cleanupError = "Unprivileged service uninstall cleanup failed: $($_.Exception.Message)"
+            }
+        }
+        try {
+            $unprivilegedStatus = Invoke-ServiceAction -Action status -Name $script:UnprivilegedServiceName
+            if ($unprivilegedStatus.ExitCode -ne 0 -or
+                -not $unprivilegedStatus.Result.succeeded -or
+                $unprivilegedStatus.Result.state -ne 'NotInstalled') {
+                if ($null -eq $cleanupError) {
+                    $cleanupError = "Unprivileged service cleanup ended in state '$($unprivilegedStatus.Result.state)'."
+                }
+            }
+        }
+        catch {
+            if ($null -eq $cleanupError) {
+                $cleanupError = "Could not verify unprivileged service cleanup: $($_.Exception.Message)"
+            }
         }
     }
     if ($null -ne $cleanupError -and $null -eq $script:PrimaryError) {
