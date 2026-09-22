@@ -4,7 +4,7 @@
 
 - Publish a self-contained single-file Native AOT executable.
 - Execute the artifact without a runtime beside it.
-- Inspect the Windows service and Linux systemd command paths.
+- Install, start, inspect, restart, stop, and uninstall an owned Windows or systemd service on a disposable host.
 - Report platform coverage by actual runner and RID.
 
 ## How to get to it (user POV)
@@ -16,7 +16,7 @@ pwsh -NoProfile -File .\scripts\publish.ps1 -RuntimeIdentifier win-x64 -Configur
 & .\artifacts\publish\win-x64\orelay.exe --version
 ```
 
-The service command surface is `orelay service install|start|stop|restart|status|uninstall`. Its CLI dispatch and help are wired on the current branch. Implementations are in `src/ORelay/Services/WindowsServiceManager.cs` and `SystemdServiceManager.cs`; platform installation needs administrator or service-manager privileges and is not run by the routine helper. Republish the native executable after service review before treating its help or service commands as current.
+The service command surface is `orelay service install|start|stop|restart|status|uninstall`. Select a run-owned identity with `--name` and a run-owned absolute `--config-file`. Implementations are in `src/ORelay/Services/WindowsServiceManager.cs` and `SystemdServiceManager.cs`; platform installation needs administrator or service-manager privileges and is not run by the routine helper.
 
 ## Driving it with PowerShell
 
@@ -30,6 +30,12 @@ dotnet test tests/ORelay.Tests --filter FullyQualifiedName~SystemdServiceManager
 ```
 
 These tests exercise injected service boundaries. They do not install a real service. A real service pass must use a run-owned name and executable/configuration path, record the manager state, and remove only that owned service.
+
+On a matching disposable privileged host, invoke `.github/workflows/service-smoke.ps1 -ExecutablePath <absolute-native-path> -RunRoot <unique-run-directory> -Rid <win-x64-or-linux-x64> -RequireServiceProof`. It checks a conflicting definition, repeated operations, paths with spaces and a literal dollar sign, real callback delivery, registration loss after restart, preserved config, and final service removal. The x64 CI jobs require this proof; unavailable privileges or systemd fail the job after recording the prerequisite.
+
+CI also checks installation without privileges. On Windows the script creates a temporary non-admin account, grants access only to its run directory, and removes the account and grant afterward. On Linux it invokes installation as the ordinary runner user. Both must return `PermissionDenied` with exit code 3 and leave the proposed service absent. Keep this machine-state proof on disposable CI hosts.
+
+The native smoke script's `-HideRuntimeForProof` switch is restricted to GitHub Actions. It validates and temporarily moves the selected installation's `shared` directory, proves a managed control fails for the missing runtime, runs the native executable, and restores the directory in `finally`. Inspect the positive/negative control records and `runtime-restore.json` before claiming runtime independence. Do not use this switch on a developer machine.
 
 ## Gotchas
 

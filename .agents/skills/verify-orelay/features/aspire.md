@@ -4,7 +4,8 @@
 
 - Start a consuming AppHost with `WithORelay`.
 - Register the API callback before the API begins serving.
-- Renew the registration while the resource stays alive.
+- Renew from the AppHost, including while the API process is suspended.
+- Resolve the allocated callback endpoint, with explicit URL, hostname, and optional Tailscale discovery inputs.
 - Surface registration loss and require an explicit resource or AppHost restart.
 - Exercise the package from a local NuGet artifact as well as a project reference.
 
@@ -20,6 +21,8 @@ dotnet run --project samples/ORelay.Sample.AppHost --no-build -- --RelayUrl http
 ```
 
 For the package path, use a fresh local version, `samples/NuGet.Local.Config`, and the commands in `samples/GUIDE.md`.
+
+`WithORelay` accepts an exact `callbackUrl` or discovery options. An explicit URL wins; otherwise a hostname override or Tailscale discovery supplies the host while the allocated endpoint supplies its scheme and port. The sample exposes `--CallbackUrl`, `--CallbackHostname`, and `--CallbackDiscovery`. Known loopback-only bindings cannot advertise a remote discovered hostname. See `src/ORelay.Aspire.Hosting/CallbackDestination.cs` and the focused `CallbackDestinationTests` for this boundary.
 
 ## Driving it with PowerShell
 
@@ -38,9 +41,14 @@ dotnet test tests/ORelay.Aspire.Hosting.Tests --filter Category=AspireIntegratio
 
 Set `ORELAY_TEST_RELAY_BINARY` to the absolute native executable when running the real-relay restart case. The repository's existing package proof is under `.artifacts/verification/aspire-package/`. This skill does not count that proof as a new run unless the commands are executed again.
 
+The two-AppHost test also follows a callback with a valid routing ID and tampered opaque state through the relay. The worktree must return `400 invalid_state`, then the original cookie-bound flow must still complete successfully.
+
+To prove orphan cleanup after a crash, launch the sample AppHost as a separate recorded process against an owned relay with a short lease. Confirm its registration still routes after the initial lease duration, then kill only that AppHost's process tree without graceful shutdown. Leave the relay running and wait longer than one lease. The old ID must return 404. Start a fresh AppHost on the same API port, then another on a changed `--ApiPort`; each must receive a fresh ID while old IDs remain invalid. Capture process IDs, ports, timestamps, HTTP results, and final listener/process cleanup. This checks AppHost ownership failure, which suspending the API alone does not exercise.
+
 ## Gotchas
 
 - DCP must be installed and usable for the integration path.
 - The relay and AppHost need separate run-owned ports and configs.
 - A lost registration requires an explicit restart. The sample does not change a running process's environment.
 - A project reference and a packed local NuGet package test different dependency paths. Record which one ran.
+- A Tailscale DNS result requires name resolution from the browser's network position. Use an explicit reachable URL or IP hostname override when MagicDNS is unavailable.
