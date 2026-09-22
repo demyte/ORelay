@@ -9,6 +9,8 @@ Use `orelay <command> --help` for syntax. Global options can appear before or af
 | `--help`, `-h` | Print help without creating configuration. |
 | `--version`, `-v` | Print the executable version without creating configuration. |
 
+Version output includes the SemVer version and source commit, for example `0.2.0-rc.1+<commit>`. The same stamp is embedded in the executable. See [versions and releases](releases.md) for tag and development-build rules.
+
 ## Configuration
 
 ```text

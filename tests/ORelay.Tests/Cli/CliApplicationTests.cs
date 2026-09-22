@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ORelay.Cli;
 
 namespace ORelay.Tests.Cli;
@@ -14,7 +15,7 @@ public sealed class CliApplicationTests
         var exitCode = await CliApplication.ExecuteAsync(VersionArguments, output, error);
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal("orelay 0.1.0", output.ToString().Trim());
+        Assert.Matches(@"\Aorelay [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z", output.ToString().Trim());
         Assert.Empty(error.ToString());
     }
 
@@ -26,7 +27,10 @@ public sealed class CliApplicationTests
         var exitCode = await CliApplication.ExecuteAsync(JsonVersionArguments, output);
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal("{\"version\":\"0.1.0\"}", output.ToString().Trim());
+        using var document = JsonDocument.Parse(output.ToString());
+        Assert.Single(document.RootElement.EnumerateObject());
+        Assert.Matches(@"\A[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\z",
+            document.RootElement.GetProperty("version").GetString()!);
     }
 
     [Fact]

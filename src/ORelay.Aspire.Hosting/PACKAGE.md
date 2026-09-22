@@ -2,6 +2,8 @@
 
 Reference this package from the AppHost only. Start the shared ORelay server separately.
 
+Tagged releases are published to `https://nuget.pkg.github.com/demyte/index.json`. See the repository's [version and feed instructions](https://github.com/demyte/ORelay/blob/main/docs/releases.md) for authentication and source mapping.
+
 ```csharp
 using ORelay.Aspire.Hosting;
 

@@ -66,6 +66,8 @@ The helper does not claim service-manager, Tailscale, or Aspire coverage. Use th
 
 For server logging changes, also run `.github/workflows/logging-smoke.ps1` against the published executable. The [relay feature map](features/relay-leases.md#console-logging) covers captured text/JSON output, redaction, and terminal colour checks.
 
+For versioning and release changes, follow [versions and releases](features/versions-releases.md). Use its isolated Git fixture and package-consumer check before an authorized release tag is pushed.
+
 ## Evidence
 
 Each run writes proof to `.artifacts/verification/<run-id>/` and temporary state to `work/verification/<run-id>/`. The evidence includes the executable inventory and SHA-256, command stdout and stderr with exit codes, health, configuration actions, doctor JSON, concurrent registration responses, exact callback locations and received targets, lease renewal and expiry, deregistration, and per-process cleanup records.

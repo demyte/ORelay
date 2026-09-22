@@ -16,7 +16,7 @@ The sample also accepts `--CallbackUrl` for an exact callback destination, `--Ca
 To prove local NuGet consumption, choose a fresh prerelease version for each changed package to avoid reusing a previous cached package:
 
 ```powershell
-dotnet pack src/ORelay.Aspire.Hosting -o .artifacts/packages -p:PackageVersion=0.1.0-local.1
+dotnet pack src/ORelay.Aspire.Hosting -o .artifacts/packages -p:MinVerVersionOverride=0.1.0-local.1
 dotnet build samples/ORelay.Sample.AppHost -p:UseORelayPackage=true -p:ORelayPackageVersion=0.1.0-local.1 --configfile samples/NuGet.Local.Config
 dotnet run --project samples/ORelay.Sample.AppHost --no-build -p:UseORelayPackage=true -p:ORelayPackageVersion=0.1.0-local.1 -- --RelayUrl http://127.0.0.1:12987
 ```

@@ -39,7 +39,9 @@ Run `pwsh -NoProfile -File scripts/build.ps1`, `scripts/format.ps1`, and `script
 
 Read `.agents/skills/verify-orelay/SKILL.md` for real CLI/HTTP verification and its feature map. Aspire integration tests use a run-owned relay and the sample commands in `samples/GUIDE.md`. Gated integration tests that report skipped are not a pass. `.github/workflows/native-platforms.yml` verifies native execution on each claimed RID; service smoke runs only on disposable service-manager hosts.
 
-The MIT license and implementation are authorized. Publishing a NuGet package or a public release still requires a separate request. Keep test service names and process IDs distinct from any user installation.
+The MIT license and implementation are authorized. Release publication is automated when an authorized `v` version tag is pushed. Do not create or push a release tag without a request to release that version. Keep test service names and process IDs distinct from any user installation.
+
+Version stamping comes from MinVer and Git tags. Keep `--version`, assembly/file/product stamps, package metadata, and archive names consistent. Run `scripts/test-versioning.ps1` for stable, prerelease, and development build checks in an isolated Git fixture; never create verification tags in the real checkout. Run `scripts/verify-package.ps1` against the actual package artifact. Release workflow and feed instructions are in `docs/releases.md`.
 
 When creating or updating a GitHub issue, pull request description, or comment, include this footer once, using the actual model and reasoning level:
 

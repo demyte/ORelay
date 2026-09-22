@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using ORelay.Configuration;
 
@@ -5,7 +6,8 @@ namespace ORelay.Cli;
 
 public static class CliApplication
 {
-    public const string Version = "0.1.0";
+    public static string Version { get; } = typeof(CliApplication).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
 
     public static async Task<int> ExecuteAsync(
         IReadOnlyList<string>? args,

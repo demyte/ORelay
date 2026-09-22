@@ -47,6 +47,6 @@ These service checks are mandatory for the x64 jobs. Missing privileges or syste
 
 ## Artifacts and evidence
 
-Each native job archives `orelay-<rid>.zip` on Windows or `orelay-<rid>.tar.gz` on Unix and writes a SHA-256 checksum file using the RID in every name. Unix archives use `tar` so extraction keeps the executable bit. The archive includes the executable, its optional symbols, and the MIT `LICENSE`. The job also uploads the sanitized smoke evidence separately. Release publication, code signing, notarization, and package uploads remain explicit later actions.
+Each native job archives `orelay-<version>-<rid>.zip` on Windows or `orelay-<version>-<rid>.tar.gz` on Unix and writes a SHA-256 checksum file using the version and RID in every name. Unix archives use `tar` so extraction keeps the executable bit. The archive includes the executable, its optional symbols, and the MIT `LICENSE`. The job also uploads the sanitized smoke evidence separately. The [release workflow](releases.md) reuses these checks before publishing a version tag. Code signing and notarization remain separate work.
 
 References: [Native AOT deployment](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot), [Native AOT cross-compilation](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/cross-compile), and the [GitHub-hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

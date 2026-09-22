@@ -3,6 +3,14 @@
     <RepositoryRoot>$(MSBuildThisFileDirectory)</RepositoryRoot>
   </PropertyGroup>
 
+  <Target Name="StampORelayAssemblyVersion" AfterTargets="MinVer">
+    <PropertyGroup>
+      <AssemblyVersion>$(MinVerMajor).$(MinVerMinor).$(MinVerPatch).0</AssemblyVersion>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="ORelayGetVersion" DependsOnTargets="MinVer;InitializeSourceControlInformation;AddSourceRevisionToInformationalVersion" />
+
   <Target Name="CheckFormatting">
     <Exec Command="dotnet format &quot;$(RepositoryRoot)ORelay.sln&quot; --verify-no-changes --no-restore" />
   </Target>

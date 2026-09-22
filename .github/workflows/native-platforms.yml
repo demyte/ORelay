@@ -5,13 +5,24 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      expected-version:
+        description: Optional version to require in the published artifacts
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      expected-version:
+        description: Optional version to require in the published artifacts
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
   group: native-platforms-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   DOTNET_VERSION: 10.0.401
@@ -44,12 +55,15 @@ jobs:
             executable: orelay
 
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
 
       - name: Set up .NET SDK
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -62,6 +76,22 @@ jobs:
           $runRoot = Join-Path $env:RUNNER_TEMP "orelay-native-$env:RID-$([Guid]::NewGuid().ToString('N'))"
           New-Item -ItemType Directory -Path $runRoot, (Join-Path $runRoot publish), (Join-Path $runRoot evidence), (Join-Path $runRoot artifact) | Out-Null
           "RUN_ROOT=$runRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Compute version metadata
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs['expected-version'] }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadata = @(pwsh -NoProfile -File scripts/get-version.ps1 | ConvertFrom-Json)
+          if ($metadata.Count -ne 1) { throw 'Version script did not return exactly one JSON object.' }
+          if (-not [string]::IsNullOrWhiteSpace($env:EXPECTED_VERSION) -and $metadata.version -cne $env:EXPECTED_VERSION) {
+            throw "Computed version '$($metadata.version)' does not match expected release version '$env:EXPECTED_VERSION'."
+          }
+          $metadata | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $env:RUN_ROOT evidence computed-version.json)
+          "RELEASE_VERSION=$($metadata.version)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_INFORMATIONAL_VERSION=$($metadata.informationalVersion)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "RELEASE_COMMIT=$($metadata.commit)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install Linux Native AOT prerequisites
         if: startsWith(matrix.rid, 'linux-')
@@ -144,6 +174,27 @@ jobs:
             -HideRuntimeForProof
           if ($LASTEXITCODE -ne 0) { throw "Native smoke failed with exit code $LASTEXITCODE." }
 
+      - name: Assert native CLI version identity
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $executable = Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME
+          $output = @(& $executable --version 2>&1)
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) { throw "Native --version failed with exit code $exitCode." }
+          $line = ($output | Where-Object { $_ -match '^orelay ' } | Select-Object -First 1).ToString().Trim()
+          $actual = $line.Substring('orelay '.Length)
+          if ($actual -cne $env:RELEASE_INFORMATIONAL_VERSION) {
+            throw "Native CLI identity '$actual' does not match computed informational version '$env:RELEASE_INFORMATIONAL_VERSION'."
+          }
+          $semver = $actual.Split('+')[0]
+          if ($semver -cne $env:RELEASE_VERSION) {
+            throw "Native CLI SemVer '$semver' does not match computed version '$env:RELEASE_VERSION'."
+          }
+
       - name: Exercise server console logging
         shell: pwsh
         env:
@@ -186,10 +237,10 @@ jobs:
           Get-ChildItem -LiteralPath (Join-Path $env:RUN_ROOT publish) -Filter '*.pdb' -File | Copy-Item -Destination $staging -Force
           Copy-Item -LiteralPath LICENSE -Destination $staging -Force
           if ($env:RID.StartsWith('win-')) {
-            $archive = Join-Path $artifactRoot "orelay-$env:RID.zip"
+            $archive = Join-Path $artifactRoot "orelay-$env:RELEASE_VERSION-$env:RID.zip"
             Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archive
           } else {
-            $archive = Join-Path $artifactRoot "orelay-$env:RID.tar.gz"
+            $archive = Join-Path $artifactRoot "orelay-$env:RELEASE_VERSION-$env:RID.tar.gz"
             tar -czf $archive -C $staging .
           }
           Get-FileHash -LiteralPath $archive -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  $([IO.Path]::GetFileName($archive))" } | Set-Content -LiteralPath "$archive.sha256"
@@ -198,7 +249,7 @@ jobs:
 
       - name: Upload native evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: orelay-${{ matrix.rid }}-evidence
           path: ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/evidence
@@ -206,7 +257,7 @@ jobs:
 
       - name: Upload native artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: orelay-${{ matrix.rid }}
           path: ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/artifact

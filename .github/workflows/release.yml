@@ -1,0 +1,292 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release-tag-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  DOTNET_VERSION: 10.0.401
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      isPrerelease: ${{ steps.version.outputs.isPrerelease }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Validate tag and compute version
+        id: version
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadata = @(pwsh -NoProfile -File scripts/get-version.ps1 -Tag $env:TAG | ConvertFrom-Json)
+          if ($metadata.Count -ne 1) { throw 'Version script did not return exactly one JSON object.' }
+          $isPrerelease = $metadata.version -match '-'
+          "version=$($metadata.version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "isPrerelease=$($isPrerelease.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+  ci:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  native:
+    needs: validate
+    uses: ./.github/workflows/native-platforms.yml
+    with:
+      expected-version: ${{ needs.validate.outputs.version }}
+
+  package:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Pack hosting library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path artifacts/packages -Force | Out-Null
+          dotnet pack src/ORelay.Aspire.Hosting/ORelay.Aspire.Hosting.csproj --configuration Release --output artifacts/packages
+          if ($LASTEXITCODE -ne 0) { throw "dotnet pack failed with exit code $LASTEXITCODE." }
+
+      - name: Verify package metadata and consumption
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          pwsh -NoProfile -File scripts/verify-package.ps1 -PackageDirectory artifacts/packages -ExpectedVersion $env:EXPECTED_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Package verification failed with exit code $LASTEXITCODE." }
+
+      - name: Upload hosting package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: orelay-package
+          path: artifacts/packages/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    needs: [validate, ci, native, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      IS_PRERELEASE: ${{ needs.validate.outputs.isPrerelease }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download native artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: orelay-*
+          path: artifacts/native
+
+      - name: Download hosting package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: orelay-package
+          path: artifacts/packages
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Validate release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nativeRoot = Join-Path $env:GITHUB_WORKSPACE 'artifacts/native'
+          $assetRoot = Join-Path $env:GITHUB_WORKSPACE 'artifacts/release'
+          $rids = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')
+          $expectedArchives = foreach ($rid in $rids) {
+            $extension = if ($rid.StartsWith('win-')) { '.zip' } else { '.tar.gz' }
+            "orelay-$env:VERSION-$rid$extension"
+          }
+
+          # The broad artifact pattern also sees the separately uploaded evidence.
+          # Only the six versioned archives and their checksums can enter a release.
+          $releaseFiles = @(Get-ChildItem -LiteralPath $nativeRoot -Recurse -File |
+            Where-Object { $_.FullName -notmatch '[\\/]orelay-[^\\/]+-evidence[\\/]' })
+          $archives = @($releaseFiles | Where-Object { $expectedArchives -contains $_.Name })
+          if ($archives.Count -ne $expectedArchives.Count) {
+            throw "Expected six native archives, found $($archives.Count)."
+          }
+          foreach ($expectedName in $expectedArchives) {
+            $archive = @($archives | Where-Object Name -EQ $expectedName)
+            if ($archive.Count -ne 1) { throw "Expected exactly one native archive named $expectedName." }
+            $checksumPath = "$($archive[0].FullName).sha256"
+            if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) { throw "Checksum is missing for $expectedName." }
+            $checksum = (Get-Content -Raw -LiteralPath $checksumPath).Trim()
+            $actualHash = (Get-FileHash -LiteralPath $archive[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $escapedName = [regex]::Escape($expectedName)
+            if ($checksum -notmatch "^(?<hash>[0-9a-fA-F]{64})\s+$escapedName$") { throw "Checksum file for $expectedName has the wrong format or name." }
+            if ($Matches.hash.ToLowerInvariant() -cne $actualHash) { throw "Checksum does not match $expectedName." }
+          }
+
+          $packages = @(Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts/packages') -Filter '*.nupkg' -File)
+          if ($packages.Count -ne 1) { throw "Expected one hosting package, found $($packages.Count)." }
+          $expectedPackage = "ORelay.Aspire.Hosting.$env:VERSION.nupkg"
+          if ($packages[0].Name -cne $expectedPackage) { throw "Expected package $expectedPackage, found $($packages[0].Name)." }
+
+          if (Test-Path -LiteralPath $assetRoot) { throw "Release asset directory already exists: $assetRoot" }
+          New-Item -ItemType Directory -Path $assetRoot | Out-Null
+          foreach ($archive in $archives) {
+            Copy-Item -LiteralPath $archive.FullName -Destination $assetRoot
+            Copy-Item -LiteralPath "$($archive.FullName).sha256" -Destination $assetRoot
+          }
+          Copy-Item -LiteralPath $packages[0].FullName -Destination $assetRoot
+          "RELEASE_ASSET_ROOT=$assetRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Create or resume draft release and upload assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseJson = & gh release view $env:TAG --json isDraft,assets 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            & gh release create $env:TAG --verify-tag --draft --generate-notes --title $env:TAG
+            if ($LASTEXITCODE -ne 0) { throw "Could not create draft release $env:TAG." }
+            $releaseJson = & gh release view $env:TAG --json isDraft,assets
+          }
+          $release = $releaseJson | ConvertFrom-Json
+          if (-not $release.isDraft) {
+            throw "Release $env:TAG is already final. Published release and package versions are immutable; create a new version and tag."
+          }
+          $existingAssets = @($release.assets)
+          foreach ($file in Get-ChildItem -LiteralPath $env:RELEASE_ASSET_ROOT -File) {
+            $existing = @($existingAssets | Where-Object Name -EQ $file.Name)
+            if ($existing.Count -gt 1) { throw "Draft release contains duplicate assets named $($file.Name)." }
+            if ($existing.Count -eq 1) {
+              if ($existing[0].size -ne $file.Length) { throw "Existing draft asset $($file.Name) has a different size and will not be replaced." }
+              $existingDigest = [string]$existing[0].digest
+              if ($existingDigest -match '^sha256:(?<hash>[0-9a-fA-F]{64})$') {
+                $localDigest = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+                if ($Matches.hash.ToLowerInvariant() -cne $localDigest.ToLowerInvariant()) { throw "Existing draft asset $($file.Name) has different content and will not be replaced." }
+              } elseif ($existing[0].apiUrl) {
+                $downloadPath = Join-Path $env:RUNNER_TEMP "existing-$($file.Name)"
+                $downloadDirectory = Split-Path -Parent $downloadPath
+                & gh release download $env:TAG --pattern $file.Name --dir $downloadDirectory --clobber
+                if ($LASTEXITCODE -ne 0) { throw "Could not verify existing draft asset $($file.Name)." }
+                $downloadedPath = Join-Path $downloadDirectory $file.Name
+                if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) { throw "Could not verify existing draft asset $($file.Name)." }
+                $localDigest = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+                $remoteDigest = (Get-FileHash -LiteralPath $downloadedPath -Algorithm SHA256).Hash
+                if ($localDigest.ToLowerInvariant() -cne $remoteDigest.ToLowerInvariant()) { throw "Existing draft asset $($file.Name) has different content and will not be replaced." }
+              } else {
+                throw "Could not verify existing draft asset $($file.Name)."
+              }
+              Write-Output "Keeping existing draft asset $($file.Name)."
+              continue
+            }
+            & gh release upload $env:TAG $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Could not upload release asset $($file.Name)." }
+          }
+
+      - name: Publish hosting package
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts/packages') -Filter '*.nupkg' -File
+          $feed = 'https://nuget.pkg.github.com/demyte/index.json'
+          $packageId = 'ORelay.Aspire.Hosting'
+          $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("demyte:$env:GITHUB_TOKEN"))
+          $headers = @{ Authorization = "Basic $basic" }
+          $serviceIndex = Invoke-WebRequest -Uri $feed -Headers $headers -ErrorAction Stop | Select-Object -ExpandProperty Content | ConvertFrom-Json
+          $packageBase = @($serviceIndex.resources | Where-Object { $_.'@type' -like 'PackageBaseAddress*' } | Select-Object -First 1)
+          if ($packageBase.Count -eq 1) {
+            $downloadBase = $packageBase[0].'@id'.TrimEnd('/')
+          } else {
+            throw 'The NuGet feed does not advertise a PackageBaseAddress for verifying published packages.'
+          }
+          $normalizedId = $packageId.ToLowerInvariant()
+          $normalizedVersion = $env:PACKAGE_VERSION.ToLowerInvariant()
+          $downloadUri = "$downloadBase/$normalizedId/$normalizedVersion/$normalizedId.$normalizedVersion.nupkg"
+          $existingPath = Join-Path $env:RUNNER_TEMP "ORelay.Aspire.Hosting.$env:PACKAGE_VERSION.existing.nupkg"
+          function Get-ExistingPackage {
+            param([Parameter(Mandatory = $true)][string]$Destination)
+            try {
+              Invoke-WebRequest -Uri $downloadUri -Headers $headers -OutFile $Destination -ErrorAction Stop
+              return $true
+            } catch {
+              $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+              if ($status -eq 404) { return $false }
+              throw
+            }
+          }
+          function Assert-PackageMatches {
+            param([Parameter(Mandatory = $true)][string]$Existing)
+            $localHash = (Get-FileHash -LiteralPath $package.FullName -Algorithm SHA256).Hash
+            $existingHash = (Get-FileHash -LiteralPath $Existing -Algorithm SHA256).Hash
+            if ($localHash.ToLowerInvariant() -cne $existingHash.ToLowerInvariant()) {
+              throw "GitHub Packages already contains $env:PACKAGE_VERSION with different content."
+            }
+          }
+          if (Get-ExistingPackage -Destination $existingPath) {
+            Assert-PackageMatches -Existing $existingPath
+            Write-Output "GitHub Packages already contains the matching immutable package $env:PACKAGE_VERSION."
+            exit 0
+          }
+          # --skip-duplicate handles a publish race. The post-publish download below
+          # still compares the bytes, so a duplicate cannot silently publish a mismatch.
+          dotnet nuget add source $feed --name github-release --username demyte --password $env:GITHUB_TOKEN --store-password-in-clear-text
+          if ($LASTEXITCODE -ne 0) { throw "Could not configure the GitHub NuGet source. Exit code $LASTEXITCODE." }
+          dotnet nuget push $package.FullName --source github-release --api-key $env:GITHUB_TOKEN --skip-duplicate
+          if ($LASTEXITCODE -ne 0) { throw "NuGet publish failed with exit code $LASTEXITCODE." }
+          $published = $false
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            if (Get-ExistingPackage -Destination $existingPath) {
+              Assert-PackageMatches -Existing $existingPath
+              $published = $true
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
+          if (-not $published) { throw "NuGet publish completed but the immutable package could not be downloaded for verification." }
+
+      - name: Finalize GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & gh release edit $env:TAG --draft=false "--prerelease=$env:IS_PRERELEASE"
+          if ($LASTEXITCODE -ne 0) { throw "Could not finalize release $env:TAG." }

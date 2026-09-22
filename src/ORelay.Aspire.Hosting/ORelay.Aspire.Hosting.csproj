@@ -2,10 +2,11 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackageId>ORelay.Aspire.Hosting</PackageId>
-    <Version>0.1.0</Version>
     <Description>Aspire registration lifecycle for an independently running ORelay server.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>PACKAGE.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/demyte/ORelay</PackageProjectUrl>
+    <PackageTags>aspire;oauth;development;relay</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../ORelay/Discovery/CallbackDiscovery.cs" Link="Discovery/CallbackDiscovery.cs" />
