@@ -573,7 +573,7 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
 
     private static WindowsServiceQueryResult ReadConfiguration(IntPtr service)
     {
-        QueryServiceConfig(service, IntPtr.Zero, 0, out var bytesNeeded);
+        QueryServiceConfigW(service, IntPtr.Zero, 0, out var bytesNeeded);
         var error = Marshal.GetLastWin32Error();
         if (bytesNeeded <= 0 || error != 122)
         {
@@ -583,7 +583,7 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
         var buffer = Marshal.AllocHGlobal(bytesNeeded);
         try
         {
-            if (!QueryServiceConfig(service, buffer, bytesNeeded, out _))
+            if (!QueryServiceConfigW(service, buffer, bytesNeeded, out _))
             {
                 error = Marshal.GetLastWin32Error();
                 return QueryFailure("Could not read the Windows service command line.", error);
@@ -641,7 +641,7 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
         public int ErrorControl;
         public IntPtr BinaryPathName;
         public IntPtr LoadOrderGroup;
-        public IntPtr TagId;
+        public int TagId;
         public IntPtr Dependencies;
         public IntPtr ServiceStartName;
         public IntPtr DisplayName;
@@ -698,8 +698,8 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool CloseServiceHandle(IntPtr serviceHandle);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern bool QueryServiceConfig(IntPtr service, IntPtr queryConfig, int bufferSize, out int bytesNeeded);
+    [DllImport("advapi32.dll", EntryPoint = "QueryServiceConfigW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern bool QueryServiceConfigW(IntPtr service, IntPtr queryConfig, int bufferSize, out int bytesNeeded);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool QueryServiceStatusEx(IntPtr service, int infoLevel, ref NativeServiceStatusProcess status, int bufferSize, out int bytesNeeded);

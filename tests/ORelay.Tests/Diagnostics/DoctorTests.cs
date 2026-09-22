@@ -101,6 +101,29 @@ public sealed class DoctorTests
         Assert.Contains("occupied, but the listener did not identify as ORelay", text, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DoctorReportsDirectoryConfigurationPathInsteadOfThrowing(bool fix)
+    {
+        using var directory = new TemporaryDirectory();
+        var output = new StringWriter();
+
+        var code = await DoctorCommand.ExecuteAsync(
+            Options(directory.Path, json: true, fix),
+            output,
+            new StringWriter(),
+            HealthyRuntime());
+
+        Assert.Equal(DoctorExitCodes.DiagnosticFailure, code);
+        using var document = JsonDocument.Parse(output.ToString());
+        var configuration = Assert.Single(
+            document.RootElement.GetProperty("checks").EnumerateArray(),
+            check => check.GetProperty("name").GetString() == "configuration");
+        Assert.Equal("Failed", configuration.GetProperty("status").GetString());
+        Assert.Contains("directory", configuration.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static CliOptions Options(string config, bool json, bool fix) =>
         new(CliCommand.Doctor, json, config, Doctor: new DoctorCommandOptions(fix));
 

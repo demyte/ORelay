@@ -93,12 +93,23 @@ public static class DoctorCommand
         var checks = new List<DoctorCheck>();
         var changed = false;
         RelaySettings? settings = null;
+        bool? configurationExists = null;
 
-        if (!store.Exists && fix)
+        try
+        {
+            configurationExists = store.Exists;
+        }
+        catch (RelayConfigurationException ex)
+        {
+            checks.Add(DoctorCheck.Failed("configuration", ex.Message, "Check the selected path and its permissions."));
+        }
+
+        if (configurationExists == false && fix)
         {
             try
             {
                 settings = store.Init();
+                configurationExists = true;
                 changed = true;
                 checks.Add(DoctorCheck.Changed(
                     "configuration",
@@ -107,10 +118,11 @@ public static class DoctorCommand
             catch (RelayConfigurationException ex)
             {
                 checks.Add(DoctorCheck.Failed("configuration", ex.Message, "Check the selected path and its permissions."));
+                configurationExists = null;
             }
         }
 
-        if (settings is null)
+        if (settings is null && configurationExists is not null)
         {
             try
             {
