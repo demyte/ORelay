@@ -117,7 +117,7 @@ jobs:
           $probe = Join-Path $env:RUN_ROOT managed-probe
           $probeEvidence = Join-Path $env:RUN_ROOT evidence
           New-Item -ItemType Directory -Path $probe -Force | Out-Null
-          dotnet publish $env:PROJECT_PATH --configuration Release --runtime $env:RID --self-contained false --output $probe -p:PublishAot=false -p:PublishSingleFile=false --no-restore
+          dotnet publish $env:PROJECT_PATH --configuration Release --runtime $env:RID --self-contained false --output $probe -p:PublishAot=false -p:PublishSingleFile=false -p:EnableRequestDelegateGenerator=true --no-restore
           if ($LASTEXITCODE -ne 0) { throw "Framework-dependent control publish failed with exit code $LASTEXITCODE." }
           $managedProbe = Join-Path $probe 'orelay.dll'
           if (-not (Test-Path -LiteralPath $managedProbe -PathType Leaf)) { throw "Framework-dependent control was not produced: $managedProbe" }
