@@ -43,7 +43,13 @@ public static class RelayServerHost
         var options = RelayServerOptions.FromSettings(effectiveSettings);
         options.Validate();
 
-        var builder = WebApplication.CreateSlimBuilder(Array.Empty<string>());
+        // Services can start in the filesystem root. Keep configuration watchers
+        // scoped to the executable directory instead of the working directory.
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
+        {
+            Args = Array.Empty<string>(),
+            ContentRootPath = AppContext.BaseDirectory,
+        });
         // The default hosting request logs can include the full request target.
         // Callback queries carry authorization codes and state, so keep the
         // framework below warning level for this service.
