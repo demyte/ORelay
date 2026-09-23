@@ -64,7 +64,25 @@ The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic repl
 
 Ports range from 1 to 65535, leases from 1 to 86400 seconds, and registration capacity from 1 to 1000000. Discovery accepts `none`, `local`, or `tailscale`. `none` and `local` use the configured listener/hostname for the relay; neither runs Tailscale.
 
-`autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Enabling updates or changing the interval requires a service restart. The first check waits for the configured interval, and subsequent checks wait until the previous worker finishes before starting another interval.
+`autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Enabling updates or changing the interval takes effect while the service runs. The next check is due one interval after service startup or the last completed worker. Shortening the interval starts a check immediately if it is overdue. Checks never overlap.
+
+### Live configuration
+
+Foreground relays and services watch the selected configuration file. Both direct edits and `config set` or `config clear` apply while the process runs. The watcher waits about 300 milliseconds for a save to settle; polling every two seconds catches missed events. The whole file must pass validation and any configured discovery before changes apply. Missing, incomplete, invalid, or undiscoverable settings leave the last good configuration active and produce a warning without logging file contents.
+
+| Setting | Running behavior |
+| --- | --- |
+| `hostname`, `publicUrl`, `autoDiscovery` | New registration and renewal responses advertise the new callback URL. A changed public URL path becomes the callback route. |
+| `port`, `bind` | Kestrel drains requests and rebinds in the same process. Connections may be interrupted. If binding fails, ORelay attempts to restore the old listener and keeps the previous configuration. |
+| `leaseSeconds` | New registrations and renewals use the new duration. Existing expiry times stay unchanged until renewal. |
+| `maxRegistrations` | New registrations use the new limit. Lowering it does not evict existing registrations. |
+| `autoUpdate`, `autoUpdateIntervalSeconds` | A native service starts, stops, or reschedules future update checks. An installation already underway finishes normally. |
+
+Invocation flags still override saved values after a reload. Changing a bind from shared to loopback also blocks non-loopback callback destinations, including existing registrations, without deleting their rows or extending their leases. Changing it back permits those registrations again if they have not expired.
+
+Save related edits together when they must apply as one change. A rejected listener change also rejects other settings in that save. Correct and save the file again to retry. If the previous listener cannot be restored, ORelay logs an error requiring a configuration correction or restart. `config get` shows saved settings; it does not prove that a running listener accepted them.
+
+Changing an advertised URL does not update provider redirect URI registrations or client configuration. Update those separately when needed. Reloading cannot switch the selected configuration path or registration database; those belong to the process invocation.
 
 For `tailscale`, an unset hostname is discovered instead of using the `localhost` default. If an existing file contains `hostname`, it remains an explicit override. Use `orelay config clear hostname` to allow discovery after selecting `tailscale`.
 
@@ -149,7 +167,7 @@ For automatic service updates, set `autoUpdate` to `true`, optionally set `autoU
 
 The worker runs independently so it can finish replacing and restarting the relay after the relay stops. It uses the service account's permissions on Windows. Linux uses a separate transient systemd service and requires systemd 254 or later with permission to launch it. Neither platform prompts for elevation. Permission, network, or validation failures leave callback serving active and are retried after the interval.
 
-The latest worker result is saved as `<config-stem>.auto-update.json` beside the selected configuration. It contains the completion time and updater result. Set `autoUpdate` to `false` to prevent further installations. Workers check the saved value again before updating; this does not interrupt installation or rollback already underway. After disabling updates, restart the service to stop its timer too.
+The latest worker result is saved as `<config-stem>.auto-update.json` beside the selected configuration. It contains the completion time and updater result. Set `autoUpdate` to `false` to stop scheduling further checks. Workers check the saved value again before updating; this does not interrupt installation or rollback already underway.
 
 Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below.
 

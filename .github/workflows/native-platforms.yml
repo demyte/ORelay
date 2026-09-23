@@ -197,6 +197,24 @@ jobs:
             -HideRuntimeForProof
           if ($LASTEXITCODE -ne 0) { throw "Native smoke failed with exit code $LASTEXITCODE." }
 
+      - name: Exercise live configuration reload
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $reloadRunId = "native-reload-$env:RID"
+          pwsh -NoProfile -File .agents/skills/verify-orelay/scripts/verify-reload.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RuntimeIdentifier $env:RID -RunId $reloadRunId
+          $reloadExitCode = $LASTEXITCODE
+          $reloadEvidence = Join-Path '.artifacts/verification' $reloadRunId
+          if (Test-Path -LiteralPath $reloadEvidence) {
+            Copy-Item -LiteralPath $reloadEvidence -Destination (Join-Path $env:RUN_ROOT 'evidence/live-reload') -Recurse
+          }
+          if ($reloadExitCode -ne 0) { throw "Live reload verification failed with exit code $reloadExitCode." }
+
       - name: Exercise native setup command
         shell: pwsh
         env:

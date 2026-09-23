@@ -1247,8 +1247,6 @@ try {
     if ($disabledSettings.autoUpdate -eq $true -or $disabledSettings.autoUpdateIntervalSeconds -ne 60) {
         throw 'The disabled service proof does not have autoUpdate=false and a 60-second interval.'
     }
-    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action restart -Name $serviceName) -ExpectedState 'Running'
-    Wait-RelayHealth -Client $httpClient -Port $port
     Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-disabled-callback'
     $disabledIdentity = Get-ExecutableIdentity -Path $script:ServiceExecutable
     Start-Sleep -Seconds 65
@@ -1264,15 +1262,23 @@ try {
             Version = $afterDisabled.Version; Sha256 = $afterDisabled.Sha256
         })
 
+    Set-AutoUpdateReleaseFixture -Name 'failing' -Version $identities.Failing.Version
+    $longIntervalAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdateIntervalSeconds', '86400', '--json'
+    ) -EvidenceName 'service-auto-update-long-interval'
+    if ($longIntervalAuto.ExitCode -ne 0) { throw 'Could not postpone the automatic update check.' }
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-before-failure-callback'
     $enableAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
         '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdate', 'true', '--json'
     ) -EvidenceName 'service-auto-update-enable'
     if ($enableAuto.ExitCode -ne 0) { throw 'Could not enable automatic updates in the run-owned configuration.' }
+    Start-Sleep -Seconds 3
+    if (Test-Path -LiteralPath $autoResultPath) { throw 'The enabled service ignored the longer update interval.' }
+    $shortIntervalAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdateIntervalSeconds', '60', '--json'
+    ) -EvidenceName 'service-auto-update-live-shorter-interval'
+    if ($shortIntervalAuto.ExitCode -ne 0) { throw 'Could not shorten the running automatic update interval.' }
     $autoConfigHash = (Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash
-    Set-AutoUpdateReleaseFixture -Name 'failing' -Version $identities.Failing.Version
-    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action restart -Name $serviceName) -ExpectedState 'Running'
-    Wait-RelayHealth -Client $httpClient -Port $port
-    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-before-failure-callback'
     [void](Wait-AutoUpdateResult -ExpectedStatus 'failed' -EvidenceName 'service-auto-update-failed-result')
     $fixtureRequestsPath = Join-Path $script:WorkPath 'auto-update-fixture-requests.txt'
     $failureRequests = @(Get-Content -LiteralPath $fixtureRequestsPath)

@@ -21,7 +21,8 @@ public static class RelayServerEndpoints
     public static IEndpointRouteBuilder MapRelayEndpoints(
         this IEndpointRouteBuilder endpoints,
         RegistrationStore registrations,
-        RelayServerOptions options)
+        RelayServerOptions options,
+        Func<RelayServerOptions>? currentOptions = null)
     {
         ArgumentNullException.ThrowIfNull(endpoints);
         ArgumentNullException.ThrowIfNull(registrations);
@@ -34,7 +35,17 @@ public static class RelayServerEndpoints
 
         endpoints.MapDelete("/registrations/{id}", DeleteRegistration);
 
-        endpoints.MapGet(options.CallbackRoutePath, RouteCallback);
+        if (currentOptions is null)
+        {
+            endpoints.MapGet(options.CallbackRoutePath, RouteCallback);
+        }
+        else
+        {
+            endpoints.MapGet("/{**callbackPath}", (HttpContext context) =>
+                string.Equals(context.Request.Path.Value?.TrimEnd('/'),
+                    currentOptions().CallbackRoutePath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase)
+                    ? RouteCallback(context, registrations) : Results.NotFound());
+        }
 
         endpoints.MapGet("/health", Health);
 

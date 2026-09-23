@@ -65,6 +65,8 @@ orelay --config-file /data/orelay.json server
 
 Registrations are stored in a sibling SQLite file, such as `/data/orelay.registrations.db`. Updates preserve that file. Unexpired registrations survive relay restarts; expiry continues while the relay is stopped. Applications must restart explicitly if their lease expires or their registration is deleted.
 
+The running relay watches its selected configuration file. Valid edits apply automatically, including hostname, port, bind address, lease policy, and update scheduling. A listener change briefly interrupts connections. Invalid edits keep the previous settings, and command-line overrides still take precedence. See [live configuration](docs/cli.md#live-configuration) for details.
+
 See the [CLI reference](docs/cli.md) for configuration, logging, JSON output, and exit codes. Use `setup` for guided configuration or `setup --defaults --yes` for unattended defaults.
 
 ## Use with Aspire
@@ -129,10 +131,9 @@ To enable automatic updates for an installed Windows or Linux service:
 ```text
 orelay --config-file <absolute-config-path> config set autoUpdate true
 orelay --config-file <absolute-config-path> config set autoUpdateIntervalSeconds 86400
-orelay --config-file <absolute-config-path> service restart --name <service-name>
 ```
 
-Automatic updates are off by default. When enabled, the service checks for stable releases every 24 hours by default and restarts itself to apply an update. Set the interval in seconds, from `60` to `2592000`. The first check waits for that interval. Restart the service after enabling updates or changing the interval. Foreground runs never check automatically.
+Automatic updates are off by default. When enabled, the service checks for stable releases every 24 hours by default and restarts itself to apply an update. Set the interval in seconds, from `60` to `2592000`. Enabling updates or changing the interval takes effect while the service runs. The next check is due one interval after service startup or the last completed check, and runs immediately if already overdue. Foreground runs never check automatically.
 
 The service account needs permission to replace the executable and restart its service. Linux also requires `systemd-run` from systemd 254 or later. The latest check or installation result is written beside the selected config, for example `orelay.auto-update.json`. To turn updates off, set `autoUpdate` to `false`. A worker rereads that setting before installation; an installation already underway finishes normally.
 

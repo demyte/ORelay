@@ -15,10 +15,10 @@ public sealed class RegistrationStore : IDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly TimeProvider _timeProvider;
-    private readonly TimeSpan _leaseDuration;
-    private readonly int _maxRegistrations;
+    private TimeSpan _leaseDuration;
+    private int _maxRegistrations;
     private readonly SqliteRegistrationDatabase? _database;
-    private readonly bool _allowNonLoopbackDestinations;
+    private bool _allowNonLoopbackDestinations;
 
     public RegistrationStore(
         TimeProvider? timeProvider = null,
@@ -84,22 +84,45 @@ public sealed class RegistrationStore : IDisposable
         }
     }
 
-    public TimeSpan LeaseDuration => _leaseDuration;
+    public TimeSpan LeaseDuration
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _leaseDuration;
+            }
+        }
+    }
+
+    public void ApplyConfiguration(TimeSpan leaseDuration, int maxRegistrations, bool allowNonLoopbackDestinations)
+    {
+        ValidateConfiguration(leaseDuration, maxRegistrations);
+
+        lock (_gate)
+        {
+            _leaseDuration = leaseDuration;
+            _maxRegistrations = maxRegistrations;
+            _allowNonLoopbackDestinations = allowNonLoopbackDestinations;
+        }
+    }
 
     public RegistrationOperationResult Register(
         string callbackUrl,
         bool allowNonLoopback,
         string relayCallbackUrl = "")
     {
-        // Per-call policy may narrow the durable store policy, but never widen it.
-        var effectiveAllowNonLoopback = allowNonLoopback && (_database is null || _allowNonLoopbackDestinations);
-        if (!CallbackDestination.TryValidate(callbackUrl, effectiveAllowNonLoopback, out _, out var errorCode))
-        {
-            return RegistrationOperationResult.Invalid(errorCode);
-        }
-
         lock (_gate)
         {
+            // The request policy can narrow the current store policy, but it
+            // cannot widen it. Validate under the gate so a configuration
+            // update cannot race this decision.
+            var effectiveAllowNonLoopback = allowNonLoopback && _allowNonLoopbackDestinations;
+            if (!CallbackDestination.TryValidate(callbackUrl, effectiveAllowNonLoopback, out _, out var errorCode))
+            {
+                return RegistrationOperationResult.Invalid(errorCode);
+            }
+
             var now = _timeProvider.GetUtcNow();
             RemoveExpiredLocked(now);
             if (_database is null && _entries.Count >= _maxRegistrations)
@@ -157,6 +180,11 @@ public sealed class RegistrationStore : IDisposable
                 return RegistrationOperationResult.NotFound();
             }
 
+            if (!CallbackDestination.TryValidate(entry.CallbackUrl, _allowNonLoopbackDestinations, out _, out _))
+            {
+                return RegistrationOperationResult.NotFound();
+            }
+
             entry.ExpiresAt = now + _leaseDuration;
             return RegistrationOperationResult.Success(ToResponse(entry, relayCallbackUrl));
         }
@@ -202,6 +230,11 @@ public sealed class RegistrationStore : IDisposable
             }
 
             if (!_entries.TryGetValue(id, out var entry))
+            {
+                return false;
+            }
+
+            if (!CallbackDestination.TryValidate(entry.CallbackUrl, _allowNonLoopbackDestinations, out _, out _))
             {
                 return false;
             }
@@ -258,6 +291,19 @@ public sealed class RegistrationStore : IDisposable
 
     private RegistrationResponse ToResponse(Entry entry, string relayCallbackUrl) =>
         new(entry.Id, entry.CallbackUrl, entry.ExpiresAt, (int)_leaseDuration.TotalSeconds, relayCallbackUrl);
+
+    private static void ValidateConfiguration(TimeSpan leaseDuration, int maxRegistrations)
+    {
+        if (leaseDuration <= TimeSpan.Zero || leaseDuration > TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(leaseDuration), "The lease duration must be greater than zero and no more than one day.");
+        }
+
+        if (maxRegistrations < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxRegistrations), "The registry capacity must be greater than zero.");
+        }
+    }
 
     private int RemoveExpiredLocked(DateTimeOffset now)
     {

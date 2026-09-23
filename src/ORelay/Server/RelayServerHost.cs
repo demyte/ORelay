@@ -1,7 +1,8 @@
-using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting.Systemd;
 using Microsoft.Extensions.Hosting.WindowsServices;
@@ -28,6 +29,7 @@ public static class RelayServerHost
         string? serviceName,
         string registrationDatabasePath,
         string? configurationPath = null,
+        RelaySettingsPatch? invocationOverrides = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -79,18 +81,22 @@ public static class RelayServerHost
             });
         }
         builder.Host.UseORelayServiceLifetime(serviceName);
-        builder.WebHost.UseUrls($"http://{FormatBind(effectiveSettings.Bind)}:{effectiveSettings.Port}");
+        var state = new RelayConfigurationState(effectiveSettings);
+        using var listenerConfiguration = (ConfigurationRoot)new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { [RelayListenerReload.UrlKey] = RelayListenerReload.Address(effectiveSettings) }).Build();
+        builder.WebHost.ConfigureKestrel(kestrel => kestrel.Configure(listenerConfiguration, reloadOnChange: true));
         builder.Services.AddRelayServer(options);
+        builder.Services.AddTransient(_ => RelayServerOptions.FromSettings(state.Current, registrationDatabasePath));
         var isService = OperatingSystem.IsWindows() ? WindowsServiceHelpers.IsWindowsService() :
             OperatingSystem.IsLinux() && SystemdHelpers.IsSystemdService();
         var runtime = new NativeUpdateRuntime();
-        if (effectiveSettings.AutoUpdate && isService && runtime.IsNative)
+        if (isService && runtime.IsNative)
         {
             if (string.IsNullOrWhiteSpace(configurationPath))
                 throw new ArgumentException("Automatic updates require the selected configuration path.", nameof(configurationPath));
             builder.Services.AddHostedService(provider => new ServiceAutoUpdateService(
                 runtime.ProcessPath!, configurationPath, serviceName ?? ServiceIdentity.DefaultName,
-                TimeSpan.FromSeconds(effectiveSettings.AutoUpdateIntervalSeconds),
+                state,
                 provider.GetRequiredService<ILogger<ServiceAutoUpdateService>>()));
         }
 
@@ -98,9 +104,30 @@ public static class RelayServerHost
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(RelayServerLog.Category);
         app.MapRelayEndpoints(
             app.Services.GetRequiredService<RegistrationStore>(),
-            options);
+            options, () => RelayServerOptions.FromSettings(state.Current, registrationDatabasePath));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
+        var listener = new RelayListenerReload(listenerConfiguration, app.Services.GetRequiredService<IServer>(), logger);
+        using var monitor = configurationPath is null ? null : new RelayConfigurationMonitor(
+            configurationPath,
+            (invocationOverrides ?? new RelaySettingsPatch()) with
+            {
+                Port = portOverride ?? invocationOverrides?.Port,
+                Bind = bindOverride ?? invocationOverrides?.Bind,
+            },
+            async (candidate, token) =>
+            {
+                if (candidate == state.Current) return true;
+                var nextOptions = RelayServerOptions.FromSettings(candidate, registrationDatabasePath);
+                nextOptions.Validate();
+                if (!await listener.ApplyAsync(state.Current, candidate, token).ConfigureAwait(false)) return false;
+                app.Services.GetRequiredService<RegistrationStore>().ApplyConfiguration(
+                    nextOptions.LeaseDuration, nextOptions.MaxRegistrations, nextOptions.AllowsNonLoopbackDestinations);
+                state.Publish(candidate);
+                RelayServerLog.ConfigurationApplied(logger);
+                return true;
+            }, app.Services.GetRequiredService<ILogger<RelayConfigurationMonitor>>());
+        if (monitor is not null) await monitor.StartAsync(app.Lifetime.ApplicationStopping).ConfigureAwait(false);
         var ready = new RelayServerReadyResponse(
             "orelay",
             effectiveSettings.Bind,
@@ -111,30 +138,17 @@ public static class RelayServerHost
             Console.Out.WriteLine(JsonSerializer.Serialize(ready, RelayJsonContext.Default.RelayServerReadyResponse));
         }
         RelayServerLog.Listening(logger,
-            $"http://{FormatBind(effectiveSettings.Bind)}:{effectiveSettings.Port}", options.RelayCallbackUrl);
+            RelayListenerReload.Address(effectiveSettings), options.RelayCallbackUrl);
         using var stoppingRegistration = app.Lifetime.ApplicationStopping.Register(() => RelayServerLog.Stopping(logger));
-        await app.WaitForShutdownAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await app.WaitForShutdownAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (monitor is not null) await monitor.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
         return 0;
     }
 
-    private static string FormatBind(string bind)
-    {
-        var normalized = bind.Trim('[', ']');
-        if (normalized.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-            normalized is "0.0.0.0" or "::" or "*" or "+")
-        {
-            return normalized;
-        }
-
-        if (!IPAddress.TryParse(normalized, out var address))
-        {
-            throw new ArgumentException(
-                "Bind must be localhost, an IP address, or an explicit wildcard address. Use Hostname or PublicUrl for the advertised name.",
-                nameof(bind));
-        }
-
-        return address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
-            ? $"[{address}]"
-            : address.ToString();
-    }
 }

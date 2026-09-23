@@ -6,6 +6,7 @@
 - `init` against a selected file.
 - `config get`, `config set`, and `config clear` with JSON output.
 - Default, saved, and invocation setting precedence.
+- Live configuration reload, listener recovery, and retained registrations.
 - Opt-in service updates through `autoUpdate` and `autoUpdateIntervalSeconds`.
 - Read-only configuration checks through `doctor`.
 - `setup` defaults, custom access, review, cancellation, unattended use, and optional user PATH.
@@ -33,6 +34,20 @@ Run `.agents/skills/verify-orelay/scripts/verify.ps1`. It first checks that a fr
 The helper also checks default `autoUpdate: false` and `autoUpdateIntervalSeconds: 86400`, saves an explicit opt-in with a 60-second interval, and rejects 59 seconds without changing the saved value. Pass `-CheckAutoUpdate` to keep its foreground server alive beyond that interval and confirm no automatic worker result appears while health and callback routing remain available. Focused configuration tests cover clearing both settings, missing fields in older configurations, malformed/null values, and preservation during unrelated edits. The service-manager proof is in [installation and updates](installation-updates.md).
 
 For native setup, publish the executable on a matching host and run `.github/workflows/setup-smoke.ps1 -ExecutablePath <absolute-executable-path> -RunRoot <run-owned-directory> -Rid <rid>`. It keeps configuration under `<run-owned-directory>/setup-smoke-state` and exit codes plus separate stdout/stderr under `<run-owned-directory>/evidence`. It checks defaults, existing-file preservation, custom LAN settings, and rejected redirected or invalid commands. It deletes only its own state directory. `.github/workflows/native-platforms.yml` runs it for all six published RIDs. These unattended checks do not prove terminal prompts, Tailscale connectivity, or service-manager installation. Focused `SetupCommandTests` drive those decisions with injected input and fake service or discovery results.
+
+## Live configuration reload
+
+Run the native reload helper against a published executable:
+
+```powershell
+pwsh -NoProfile -File .\.agents\skills\verify-orelay\scripts\verify-reload.ps1 -RunId reload-check
+```
+
+The helper starts two foreground processes from run-owned configuration files. It edits the selected JSON directly, then uses `config set` to exercise the CLI's atomic replacement. It checks new and renewed registrations against live hostname, lease, and capacity changes. One unrenewed registration reaches its original expiry after the lease duration changes, proving that a reload does not move its expiry. A malformed or missing file leaves the previous runtime settings in place; correcting or restoring the file applies the new values.
+
+The same run changes port, then bind address, and checks that the original process ID and registration remain. It holds a run-owned TCP listener on a requested port while changing port and hostname together. The relay must restore its old listener and keep its old advertised callback URL. Releasing the port and correcting the file must apply the requested settings. A second process proves that a saved port edit does not override a `--port` invocation setting. The helper also changes `publicUrl`, checks that the previous callback path returns 404, and follows the new path to a run-owned callback listener with a synthetic query.
+
+Use only the published artifact and the helper's own temporary config files, listeners, ports, processes, and SQLite files. Each run writes command output, health probes, HTTP responses, settings writes, process IDs, and cleanup results to `.artifacts/verification/<run-id>/`. It removes `work/verification/<run-id>/` only after its owned relays exit. It never starts or changes an installed service. The port rejection path can take up to 12 seconds while Kestrel restores its previous listener.
 
 ## Gotchas
 

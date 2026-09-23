@@ -54,6 +54,7 @@ It proves the following user paths through the public executable:
 4. The short lease expires one registration. The other stays alive after a renewal, then deletion is proved idempotent and stops routing.
 5. Read-only doctor reports a healthy owned instance without changing its configuration and reports a missing selected file without creating it.
 6. The SQLite registration file preserves live registrations, renewals, and deletions across killed relay processes. A lease that expires during downtime stays expired, and a second configuration uses an independent database.
+7. The separate `verify-reload.ps1` helper changes hostname, lease, capacity, port, bind, and callback path without replacing the relay process. Invalid or missing files keep the last applied settings, and an occupied listener target restores the prior listener before a corrected file applies.
 
 For focused checks, use the repository scripts and the public test projects:
 
@@ -75,6 +76,8 @@ For automatic service-update changes, pass `-CheckAutoUpdate` to the helper for 
 
 For setup changes, run `.github/workflows/setup-smoke.ps1` against the published executable using a run-owned `-RunRoot`. See [CLI and saved configuration](features/cli-config.md) for defaults, unattended setup, cancellation, and preservation checks. Service setup is separately exercised by the disposable Windows/Linux service smoke; the local helper never installs a service.
 
+For live configuration reload changes, run `.agents/skills/verify-orelay/scripts/verify-reload.ps1` against the published executable. It edits only run-owned files, starts foreground relay processes, and keeps evidence separate from the temporary state it removes. It checks configuration writes, runtime values, listener recovery, process and registration retention, command-line port precedence, and a changed callback path through the public HTTP routes. See [live configuration reload](features/cli-config.md#live-configuration-reload) for the sequence and evidence limits. The helper does not install or exercise a service.
+
 ## Evidence
 
 Each run writes proof to `.artifacts/verification/<run-id>/` and temporary state to `work/verification/<run-id>/`. The evidence includes the executable inventory and SHA-256, command stdout and stderr with exit codes, health, configuration actions, doctor JSON, concurrent registration responses, exact callback locations and received targets, lease renewal and expiry, deregistration, and per-process cleanup records.
@@ -93,6 +96,6 @@ If a run is interrupted, inspect the latest evidence for the recorded process ID
 
 ## Helpers
 
-The executable helper is `.agents/skills/verify-orelay/scripts/verify.ps1`. Its invocation is shown above. It accepts `-RuntimeIdentifier`, `-ExecutablePath`, and `-RunId`, returns a nonzero exit code on any failed assertion, and prints the evidence path on success. Run IDs are restricted to safe path characters, cannot reuse an existing evidence or scratch directory, and are cleaned only after the full resolved scratch path is checked as a child of `work/verification`.
+The main executable helper is `.agents/skills/verify-orelay/scripts/verify.ps1`. The live reload helper is `.agents/skills/verify-orelay/scripts/verify-reload.ps1`. Both accept `-RuntimeIdentifier`, `-ExecutablePath`, and `-RunId`; the reload helper defaults to the published `win-x64` artifact. They return a nonzero exit code on any failed assertion and print the evidence path on success. Run IDs are restricted to safe path characters, cannot reuse an existing evidence or scratch directory, and scratch cleanup occurs only after the resolved path is checked as a child of `work/verification` and every owned process has exited.
 
 Use `/maintain-verification-skill` when a user-facing command or callback contract changes. Read the feature map before editing it, then exercise every mapped path that the available platform and external services permit. Record blocked prerequisites instead of calling an unrun path passed.

@@ -59,6 +59,13 @@ public sealed class RelayConfigurationStore
         return RelaySettingsValidator.ValidateAndReturn(effective, FilePath);
     }
 
+    internal RelaySettings ReadCapturedText(string json, RelaySettingsPatch? invocationOverrides = null)
+    {
+        var document = ReadDocument(json);
+        var effective = ResolveSettings(document.ToPatch(), invocationOverrides);
+        return RelaySettingsValidator.ValidateAndReturn(effective, FilePath);
+    }
+
     public RelayConfigurationDocument? ReadSavedDocument()
     {
         var document = ReadDocumentIfPresent();
@@ -255,18 +262,22 @@ public sealed class RelayConfigurationStore
         }
     }
 
-    private RelayConfigurationDocument ReadDocument()
+    private RelayConfigurationDocument ReadDocument() => ReadDocument(ReadFileText());
+
+    private string ReadFileText()
     {
-        string json;
         try
         {
-            json = File.ReadAllText(FilePath);
+            return File.ReadAllText(FilePath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw FileFailure($"Could not read configuration file '{FilePath}'.", ex);
         }
+    }
 
+    private RelayConfigurationDocument ReadDocument(string json)
+    {
         try
         {
             using var parsed = JsonDocument.Parse(json);

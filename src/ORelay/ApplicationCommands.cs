@@ -37,7 +37,7 @@ internal static class ApplicationCommands
                     settings = discovery.Settings;
                     return await RelayServerHost.RunAsync(settings, null, null, options.IsJson, options.Server?.ServiceName,
                         registrationDatabasePath: Path.ChangeExtension(store.FilePath, "registrations.db"),
-                        configurationPath: store.FilePath).ConfigureAwait(false);
+                        configurationPath: store.FilePath, invocationOverrides: options.SettingsPatch).ConfigureAwait(false);
                 case CliCommand.Doctor:
                     return await DoctorCommand.ExecuteAsync(options, output, error, new DoctorRuntime
                     {
