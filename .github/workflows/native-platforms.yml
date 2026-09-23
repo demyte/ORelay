@@ -243,6 +243,19 @@ jobs:
           $repeat | Set-Content -LiteralPath (Join-Path $env:RUN_ROOT 'evidence/install-repeat.json')
           if ((($repeat -join "`n") | ConvertFrom-Json).changed) { throw 'Repeated native installation should make no change.' }
 
+      - name: Prove installer refuses unrelated existing executable
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/install-safety-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID
+          if ($LASTEXITCODE -ne 0) { throw "Installer safety proof failed with exit code $LASTEXITCODE." }
+
       - name: Exercise persistent registrations using installed executable
         shell: pwsh
         env:

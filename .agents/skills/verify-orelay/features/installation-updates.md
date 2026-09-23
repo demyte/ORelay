@@ -29,9 +29,13 @@ Both fixtures check `-AddToPath`/`--add-to-path` and `-SkipPath`/`--skip-path` f
 
 `UpdateEngineTests` verifies that same-version installation skips only byte-identical artifacts and replaces differing builds. Unix link cases verify rejection before creating directories or lock files, including a dangling lock-file symlink. Windows junction rejection can be checked with a run-owned junction and published executable; no child destination or lock may appear in the linked directory.
 
+`InstalledExecutableMetadata` reads existing binaries without executing them. Its bounded reader recognizes the Native AOT Company/FileVersion/InformationalVersion/RepositoryUrl metadata frame found in the supported binaries, checks the native header and version agreement, and rejects missing or ambiguous frames. This compiler layout is not a public SDK contract. Recheck the published artifacts on every RID after SDK or version-stamping changes; do not introduce an execution fallback. Candidate probes run only after download checksum or source-copy verification. `InstalledExecutableMetadataTests` covers corrupt and ambiguous metadata, length bounds, and buffer boundaries. The installer regression also uses a Unix script that would write a marker if probed and verifies it never runs.
+
 ## Native proof
 
 Install the current executable into a fresh run-owned directory. Check `--version --json`, compare source and installed SHA-256, and repeat installation to prove the no-change result. Keep a config and database beside the target and verify their bytes survive replacement. Test directory names containing spaces. Verify an invalid target fails without overwriting unrelated files.
+
+Run `.github/workflows/install-safety-smoke.ps1 -ExecutablePath <published-executable> -RunRoot <run-owned-directory> -Rid <rid>`. It creates and checks a harmless marker-writing executable, then proves native installation rejects that unrelated destination without executing it or changing its hash. Windows compiles only this authored fixture with Windows PowerShell 5.1; Unix uses an authored shell script. The native workflow runs this check on all six RIDs.
 
 Exercise self-replacement with two published fixture versions, a controlled release response, and recorded commands/exit codes. Check that a mismatched checksum, wrong version, unsafe archive, or failed restart leaves the old executable usable. Never publish verification tags or replace real release assets to construct this fixture. Focused tests cover injected network and service failures; they do not prove native replacement alone.
 

@@ -53,6 +53,22 @@ public sealed class UpdateEngineTests
         Assert.Equal("new executable", File.ReadAllText(fixture.Target));
         Assert.Equal("saved config", File.ReadAllText(config));
         Assert.Equal("saved registrations", File.ReadAllText(database));
+        Assert.False(fixture.Runtime.ExecutedOriginalTarget);
+    }
+
+    [Fact]
+    public async Task Update_RejectsUnrecognizedInstalledMetadataWithoutExecutingIt()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.InstalledVersion = null;
+
+        var result = await fixture.Engine.UpdateAsync(new UpdateRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.InvalidVersion, result.ErrorCode);
+        Assert.False(fixture.Runtime.ExecutedOriginalTarget);
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+        Assert.Empty(fixture.Service.Operations);
     }
 
     [Fact]
@@ -304,6 +320,44 @@ public sealed class UpdateEngineTests
         Assert.False(result.Succeeded);
         Assert.Equal(UpdateErrorCode.Downgrade, result.ErrorCode);
         Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+        Assert.False(fixture.Runtime.ExecutedOriginalTarget);
+    }
+
+    [Fact]
+    public async Task InstallSelf_RejectsUnrecognizedTargetWithoutExecutingIt()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        fixture.Runtime.InstalledVersion = null;
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.InstallFailure, result.ErrorCode);
+        Assert.False(fixture.Runtime.ExecutedOriginalTarget);
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+        Assert.Empty(fixture.Service.Operations);
+    }
+
+    [UnixFact]
+    public async Task InstallSelf_DoesNotRunUnrelatedExecutableToDiscoverItsIdentity()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        fixture.Runtime.UseNativeVersionReaders = true;
+        var marker = Path.Combine(fixture.Directory, "unexpected-execution");
+        var payload = "#!/bin/sh\nprintf executed > '" + marker.Replace("'", "'\\''", StringComparison.Ordinal) + "'\n";
+        File.WriteAllText(fixture.Target, payload);
+        File.SetUnixFileMode(fixture.Target, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.InstallFailure, result.ErrorCode);
+        Assert.False(File.Exists(marker));
+        Assert.Equal(payload, File.ReadAllText(fixture.Target));
+        Assert.Empty(fixture.Service.Operations);
     }
 
     [Theory]
@@ -322,6 +376,7 @@ public sealed class UpdateEngineTests
         Assert.True(result.Changed);
         Assert.Equal(File.ReadAllBytes(fixture.Source), File.ReadAllBytes(fixture.Target));
         Assert.Empty(Directory.GetFiles(fixture.Directory, "orelay*.backup-*"));
+        Assert.False(fixture.Runtime.ExecutedOriginalTarget);
     }
 
     [Fact]
@@ -426,11 +481,18 @@ public sealed class UpdateEngineTests
         public string? RuntimeIdentifier => OperatingSystem.IsWindows() ? "win-x64" : "linux-x64";
         public string CurrentVersion { get; set; } = "1.0.0+test";
         public string CandidateVersion { get; set; } = "1.1.0+test";
-        public string InstalledVersion { get; set; } = "1.0.0+test";
+        public string? InstalledVersion { get; set; } = "1.0.0+test";
+        public bool ExecutedOriginalTarget { get; private set; }
+        public bool UseNativeVersionReaders { get; set; }
+        public string? ReadInstalledVersion(string path) => UseNativeVersionReaders ? InstalledExecutableMetadata.ReadVersion(path) : InstalledVersion;
 
-        public Task<string?> ReadExecutableVersionAsync(string path, CancellationToken cancellationToken) =>
-            Task.FromResult<string?>(path == target && File.ReadAllText(path) != "new executable" ?
+        public Task<string?> ReadExecutableVersionAsync(string path, CancellationToken cancellationToken)
+        {
+            if (UseNativeVersionReaders) return new NativeUpdateRuntime().ReadExecutableVersionAsync(path, cancellationToken);
+            if (path == target && File.ReadAllText(path) == "old executable") ExecutedOriginalTarget = true;
+            return Task.FromResult(path == target && File.ReadAllText(path) != "new executable" ?
                 InstalledVersion : CandidateVersion);
+        }
     }
 
     private sealed class FakeService : IPlatformServiceManager

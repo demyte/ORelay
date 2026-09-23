@@ -60,6 +60,7 @@ public interface IUpdateRuntime
     bool IsNative { get; }
     string? RuntimeIdentifier { get; }
     string CurrentVersion { get; }
+    string? ReadInstalledVersion(string path);
     Task<string?> ReadExecutableVersionAsync(string path, CancellationToken cancellationToken);
 }
 
@@ -71,6 +72,7 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
     public bool IsNative => !RuntimeFeature.IsDynamicCodeSupported &&
         string.Equals(Path.GetFileNameWithoutExtension(ProcessPath), "orelay", StringComparison.OrdinalIgnoreCase);
     public string CurrentVersion => ORelay.Cli.CliApplication.Version;
+    public string? ReadInstalledVersion(string path) => InstalledExecutableMetadata.ReadVersion(path);
 
     public string? RuntimeIdentifier
     {

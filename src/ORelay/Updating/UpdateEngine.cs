@@ -60,9 +60,9 @@ public sealed class UpdateEngine
             if (latest.CompareTo(local) < 0)
                 throw new UpdateException(UpdateErrorCode.Downgrade, "The latest stable release is older than this executable. No downgrade was made.");
             using var updateLock = AcquireLock(target!);
-            var installedStamp = await SafeReadVersionAsync(target!, cancellationToken);
+            var installedStamp = SafeReadInstalledVersion(target!);
             if (installedStamp is null)
-                throw new UpdateException(UpdateErrorCode.InvalidVersion, "The installed executable did not report an ORelay version.");
+                throw new UpdateException(UpdateErrorCode.InvalidVersion, "The installed executable has no recognized ORelay version metadata. It was not executed or replaced.");
             var installedVersion = ParseVersion(installedStamp);
             if (latest.CompareTo(installedVersion) < 0)
                 throw new UpdateException(UpdateErrorCode.Downgrade, "The installed executable is newer. No downgrade was made.");
@@ -107,9 +107,9 @@ public sealed class UpdateEngine
             var sameVersion = false;
             if (File.Exists(target))
             {
-                var installedVersion = await SafeReadVersionAsync(target, cancellationToken);
+                var installedVersion = SafeReadInstalledVersion(target);
                 if (installedVersion is null || !SemVersion.TryParse(installedVersion, out var installed))
-                    throw new UpdateException(UpdateErrorCode.InstallFailure, "The target contains an executable that is not ORelay.");
+                    throw new UpdateException(UpdateErrorCode.InstallFailure, "The target has no recognized ORelay version metadata. It was not executed or replaced. Choose an empty installation directory.");
                 if (installed!.Value.CompareTo(version) > 0)
                     throw new UpdateException(UpdateErrorCode.Downgrade, "The installed executable is newer. No downgrade was made.");
                 sameVersion = installed.Value.CompareTo(version) == 0;
@@ -316,6 +316,13 @@ public sealed class UpdateEngine
             catch (IOException) { /* An executing image may remain until process exit. */ }
             catch (UnauthorizedAccessException) { /* Preserve it for manual cleanup. */ }
         }
+    }
+
+    private string? SafeReadInstalledVersion(string path)
+    {
+        try { return _runtime.ReadInstalledVersion(path); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        { return null; }
     }
 
     private async Task<string?> SafeReadVersionAsync(string path, CancellationToken cancellationToken)
