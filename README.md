@@ -18,15 +18,15 @@ The bootstrap scripts detect your platform, verify the release checksum, and ins
 
 > The bootstrap, self-updater, and persistent registrations are new in this checkout. Published versions through `v0.1.2` do not include them. The commands below need the first release containing these changes.
 
-While the repository is private, use your existing authenticated [GitHub CLI](https://cli.github.com/) access to download the appropriate script.
+The repository and release downloads are public. No GitHub account, token, or GitHub CLI is required to install the executable.
 
 ### Windows
 
 Run in Windows PowerShell or PowerShell 7:
 
 ```powershell
-gh api repos/demyte/ORelay/contents/install.ps1 -H "Accept: application/vnd.github.raw+json" > install.ps1
-if ($LASTEXITCODE -eq 0) { powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 }
+Invoke-WebRequest -UseBasicParsing -Uri https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1 -OutFile install.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 The default directory is `%LOCALAPPDATA%\ORelay`. Add it to your user `PATH`, or run `& "$env:LOCALAPPDATA\ORelay\orelay.exe"` directly. Use `-InstallDir <path>` to select another directory.
@@ -34,12 +34,12 @@ The default directory is `%LOCALAPPDATA%\ORelay`. Add it to your user `PATH`, or
 ### Linux and macOS
 
 ```sh
-gh api repos/demyte/ORelay/contents/install.sh -H 'Accept: application/vnd.github.raw+json' > install.sh && sh install.sh
+curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh -o install.sh && sh install.sh
 ```
 
 The default directory is `~/.local/bin`. Add it to your `PATH` if needed. Use `--install-dir <path>` to select another directory. The Unix bootstrap requires `curl`, `tar`, and a SHA-256 tool available on the supported systems.
 
-The scripts also support anonymous HTTPS downloads for public releases. For private releases, use an authenticated GitHub CLI; it also accepts `GH_TOKEN` or `GITHUB_TOKEN`. The Windows bootstrap can use either token directly without GitHub CLI. You can download the scripts from the repository and run them without cloning or building ORelay.
+You can install without cloning or building ORelay. An existing GitHub CLI login can also download the release. The self-updater accepts `GH_TOKEN` or `GITHUB_TOKEN` when authenticated access is useful.
 
 For manual installation, download the archive for your OS and architecture from [Releases](https://github.com/demyte/ORelay/releases), verify its `.sha256` file, and extract it. Run the extracted executable with `install --install-dir <path>` to put it in a stable location. The [platform guide](docs/native-platforms.md) lists tested OS versions.
 
@@ -67,7 +67,7 @@ See the [CLI reference](docs/cli.md) for configuration, logging, JSON output, an
 
 ## Use with Aspire
 
-Add `ORelay.Aspire.Hosting` to your AppHost. See the [package feed instructions](docs/releases.md#github-packages) for access and version selection. Start ORelay separately, then connect an application resource:
+Add `ORelay.Aspire.Hosting` to your AppHost. The package is public, but GitHub's NuGet registry still requires a token to restore it. See the [package feed instructions](docs/releases.md#github-packages) for authentication and version selection. Start ORelay separately, then connect an application resource:
 
 ```csharp
 using ORelay.Aspire.Hosting;

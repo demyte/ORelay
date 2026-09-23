@@ -10,7 +10,7 @@ orelay update --check --json
 orelay --config-file <run-owned-config> update --restart-service --name <run-owned-service> --json
 ```
 
-Use the published Native AOT executable. Managed execution must return exit code 69 for installation and update attempts. A read-only update check needs GitHub network access and credentials while the repository is private. Capture its result without printing tokens. It does not establish replacement or rollback.
+Use the published Native AOT executable. Managed execution must return exit code 69 for installation and update attempts. Public release downloads and a read-only update check need GitHub network access, with no credentials required. Capture its result without printing any optional tokens. It does not establish replacement or rollback.
 
 ## Focused feedback
 

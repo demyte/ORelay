@@ -14,7 +14,7 @@ cat > "$test_root/bin/gh" <<'EOF'
 #!/bin/sh
 set -eu
 case "$1 $2" in
-  'auth status') exit 0 ;;
+  'auth status') [ "${FIXTURE_NO_GH:-}" != 1 ]; exit $? ;;
   'release view')
     case "${3:-}" in
       --repo) printf '%s\n' 'v1.2.3'; exit 0 ;;
@@ -39,6 +39,27 @@ esac
 exit 2
 EOF
 chmod +x "$test_root/bin/uname" "$test_root/bin/gh"
+cat > "$test_root/bin/curl" <<'EOF'
+#!/bin/sh
+set -eu
+destination=''
+url=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) destination=$2; shift 2 ;;
+    --connect-timeout|--max-time|--write-out|--proto) shift 2 ;;
+    --header|-H|--config) printf 'Anonymous download sent authentication options.\n' >&2; exit 1 ;;
+    https://*) url=$1; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  https://github.com/demyte/ORelay/releases/latest) printf '%s' 'https://github.com/demyte/ORelay/releases/tag/v1.2.3' ;;
+  https://github.com/demyte/ORelay/releases/download/v1.2.3/*) cp "$FIXTURE_ROOT/${url##*/}" "$destination" ;;
+  *) printf 'Unexpected public download URL.\n' >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$test_root/bin/curl"
 cat > "$test_root/failing-sha256sum/sha256sum" <<'EOF'
 #!/bin/sh
 exit 1
@@ -80,6 +101,13 @@ done
 if ! run_install env FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 FIXTURE_FORCE_SHASUM=1; then
   printf 'The shasum checksum fallback failed.\n' >&2; exit 1
 fi
+
+# Public installs do not need gh, even if an unrelated token is in the environment.
+PATH="$test_root/bin:$PATH" FIXTURE_NO_GH=1 FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
+  FIXTURE_ROOT="$test_root/fixture" HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+  GH_TOKEN=unused-fixture-token ARG_LOG="$test_root/public-args" \
+  sh "$root/install.sh" --install-dir "$test_root/public install"
+grep -Fxq "$test_root/public install" "$test_root/public-args"
 
 if run_install env FIXTURE_OS=Darwin FIXTURE_ARCH=arm64 >/dev/null 2>&1; then
   printf 'Unsupported platform unexpectedly ran the installer.\n' >&2; exit 1

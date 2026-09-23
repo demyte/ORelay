@@ -47,7 +47,7 @@ Releasing these changes still requires an explicitly authorized version tag. Add
 
 The feed is `https://nuget.pkg.github.com/demyte/index.json`. The package is associated with `demyte/ORelay` through its repository metadata. The publish job receives `packages: write` and `contents: write`; other jobs have read-only repository access. It uses the workflow's `GITHUB_TOKEN`, so no publishing PAT is required.
 
-The repository is private. Publishing does not change repository or package visibility. To consume the package locally, use a GitHub personal access token, classic, with `read:packages` and access to the package. Keep credentials in your user-level NuGet configuration or environment, outside the repository. GitHub's [NuGet registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry) describes authentication and package access.
+The repository and `ORelay.Aspire.Hosting` package are public. GitHub's NuGet registry still requires authentication to install public packages. To consume the package locally, use a GitHub personal access token, classic, with `read:packages`. Keep credentials in your user-level NuGet configuration or environment, outside the repository. GitHub's [NuGet registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry#authenticating-to-github-packages) describes this requirement. Native archives and the `.nupkg` attached to a public GitHub release can be downloaded without credentials.
 
 For a consuming repository, add a source without credentials:
 

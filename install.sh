@@ -52,10 +52,6 @@ fi
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/orelay-bootstrap.XXXXXXXX") || exit 1
 cleanup() { rm -rf -- "$tmp"; }
 trap cleanup EXIT HUP INT TERM
-if [ "$gh_auth" -eq 0 ] && { [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; }; then
-    printf 'Install and authenticate the GitHub CLI to use GH_TOKEN or GITHUB_TOKEN with this private repository.\n' >&2
-    exit 1
-fi
 
 if [ -z "$version" ]; then
     if [ "$gh_auth" -eq 1 ]; then
