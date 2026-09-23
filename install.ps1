@@ -4,7 +4,9 @@ param(
     [string] $InstallDir,
     [string] $ConfigFile,
     [string] $Name,
-    [switch] $RestartService
+    [switch] $RestartService,
+    [switch] $Defaults,
+    [switch] $SkipSetup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,6 +96,7 @@ function Save-ReleaseAsset($Release, [string] $AssetName, [string] $Destination,
 }
 
 try {
+    if ($Defaults -and $SkipSetup) { throw '-Defaults and -SkipSetup cannot be used together.' }
     $rid = Get-RuntimeId
     if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be a stable X.Y.Z release.' }
     if (-not $InstallDir) {
@@ -156,7 +159,30 @@ try {
     if ($Name) { $installerArgs += @('--name', $Name) }
     if ($RestartService) { $installerArgs += '--restart-service' }
     & $executable @installerArgs
-    exit $LASTEXITCODE
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $installed = Join-Path $InstallDir 'orelay.exe'
+    $setupArgs = @('setup', '--if-needed')
+    if ($ConfigFile) { $setupArgs += @('--config-file', $ConfigFile) }
+    if ($Name) { $setupArgs += @('--name', $Name) }
+    if ($SkipSetup) {
+        Write-Output "Installed executable: $installed"
+        Write-Output 'Run it with: setup --if-needed'
+        if ($ConfigFile) { Write-Output "  --config-file: $ConfigFile" }
+        if ($Name) { Write-Output "  --name: $Name" }
+    } elseif ($Defaults) {
+        & $installed @setupArgs --defaults --yes
+        exit $LASTEXITCODE
+    } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        & $installed @setupArgs
+        exit $LASTEXITCODE
+    } else {
+        Write-Output "Installed executable: $installed"
+        Write-Output 'Run it with: setup --if-needed'
+        if ($ConfigFile) { Write-Output "  --config-file: $ConfigFile" }
+        if ($Name) { Write-Output "  --name: $Name" }
+    }
+    exit 0
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1

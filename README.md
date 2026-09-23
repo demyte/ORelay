@@ -32,6 +32,10 @@ curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh | sh
 
 Installs to `%LOCALAPPDATA%\ORelay` on Windows or `~/.local/bin` on macOS and Linux. Add that directory to your `PATH` if needed. Rerun the command to upgrade; existing configuration and registration data are preserved.
 
+On first installation in a terminal, setup shows what the defaults mean and offers **Go with defaults** or **Customize**. Defaults keep ORelay local on port `12987`, with no background service. Customize to choose a port, bind address, LAN or Tailscale access, and service startup on Windows or Linux. Confirm the summary to save. Run `orelay setup` again to change these choices. Existing settings are preserved when you rerun the installer.
+
+For unattended installation, use `-Defaults` with the PowerShell script or `--defaults` with the shell script. `-SkipSetup` or `--skip-setup` installs only. See [setup options](docs/cli.md#setup) for unattended custom configuration.
+
 <details>
 <summary>Installation options and manual downloads</summary>
 
@@ -44,7 +48,7 @@ For manual installation, download the archive for your OS and architecture from 
 ## Quick start
 
 ```text
-orelay init
+orelay setup
 orelay server
 ```
 
@@ -61,7 +65,7 @@ orelay --config-file /data/orelay.json server
 
 Registrations are stored in a sibling SQLite file, such as `/data/orelay.registrations.db`. Updates preserve that file. Unexpired registrations survive relay restarts; expiry continues while the relay is stopped. Applications must restart explicitly if their lease expires or their registration is deleted.
 
-See the [CLI reference](docs/cli.md) for configuration, logging, JSON output, and exit codes. All commands run without interactive prompts.
+See the [CLI reference](docs/cli.md) for configuration, logging, JSON output, and exit codes. Use `setup` for guided configuration or `setup --defaults --yes` for unattended defaults.
 
 ## Use with Aspire
 

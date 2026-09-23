@@ -84,6 +84,8 @@ public sealed class SystemdServiceManager : IPlatformServiceManager
             ServiceOperation.Restart => Restart(request),
             ServiceOperation.Status => Status(request),
             ServiceOperation.Uninstall => Uninstall(request),
+            ServiceOperation.Enable => SetEnabled(request, ServiceOperation.Enable, enabled: true),
+            ServiceOperation.Disable => SetEnabled(request, ServiceOperation.Disable, enabled: false),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown service operation."),
         };
     }
@@ -195,6 +197,55 @@ public sealed class SystemdServiceManager : IPlatformServiceManager
         }
 
         return WaitForState(request, ServiceOperation.Start, ServiceState.Running);
+    }
+
+    private ServiceOperationResult SetEnabled(ServiceRequest request, ServiceOperation operation, bool enabled)
+    {
+        var ownership = ReadOwned(request, operation);
+        if (ownership.Result is not null)
+        {
+            return ownership.Result;
+        }
+
+        var state = ReadManagerState(request, operation);
+        if (state.Result is not null)
+        {
+            return state.Result.ErrorCode == ServiceErrorCode.NotInstalled
+                ? Failure(operation, request, ServiceErrorCode.ManagerUnavailable,
+                    $"Systemd unit '{request.UnitFilePath}' exists but systemd has not loaded '{request.ServiceName}'. Run 'systemctl daemon-reload' and check the unit permissions.", owned: true)
+                : state.Result;
+        }
+
+        var unitName = UnitName(request);
+        var current = RunSystemctl(["is-enabled", unitName]);
+        var currentMode = current.StandardOutput.Trim();
+        if (currentMode == "enabled" && current.Succeeded && enabled ||
+            currentMode == "disabled" && !enabled)
+        {
+            var description = enabled ? "enabled at boot" : "disabled at boot";
+            return ServiceOperationResult.Success(Platform, operation, request.ServiceName, state.State, false, true,
+                $"Systemd service '{request.ServiceName}' is already {description}.");
+        }
+
+        if (currentMode is not ("enabled" or "disabled"))
+        {
+            var message = current.Succeeded
+                ? $"Systemd service '{request.ServiceName}' has unsupported enablement state '{currentMode}'."
+                : FormatProcessFailure($"inspect boot startup for systemd service '{request.ServiceName}'", current);
+            return Failure(operation, request, current.Succeeded ? ServiceErrorCode.InvalidState : ToErrorCode(current), message,
+                owned: true, state: state.State, nativeErrorCode: current.ExitCode);
+        }
+
+        var verb = enabled ? "enable" : "disable";
+        var change = RunSystemctl([verb, unitName]);
+        if (!change.Succeeded)
+        {
+            return Failure(operation, request, ToErrorCode(change), FormatProcessFailure($"{verb} systemd service '{request.ServiceName}'", change),
+                owned: true, state: state.State, nativeErrorCode: change.ExitCode);
+        }
+
+        return ServiceOperationResult.Success(Platform, operation, request.ServiceName, state.State, true, true,
+            $"Systemd service '{request.ServiceName}' was {(enabled ? "enabled" : "disabled")} at boot.");
     }
 
     private ServiceOperationResult Stop(ServiceRequest request)
@@ -509,8 +560,9 @@ public sealed class SystemdServiceManager : IPlatformServiceManager
         ServiceErrorCode errorCode,
         string message,
         bool owned = false,
-        ServiceState state = ServiceState.Unknown) =>
-        ServiceOperationResult.Failure(Platform, operation, request.ServiceName, state, errorCode, message, owned: owned);
+        ServiceState state = ServiceState.Unknown,
+        int? nativeErrorCode = null) =>
+        ServiceOperationResult.Failure(Platform, operation, request.ServiceName, state, errorCode, message, nativeErrorCode, owned);
 
     private static ServiceErrorCode ToErrorCode(ServiceProcessResult result) =>
         result.ExitCode < 0

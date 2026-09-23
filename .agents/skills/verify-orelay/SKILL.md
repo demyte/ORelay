@@ -71,6 +71,8 @@ For versioning and release changes, follow [versions and releases](features/vers
 
 For bootstrap, installation, and self-update changes, follow [installation and updates](features/installation-updates.md). Never use the user's installed binary, service, or configuration as the update target.
 
+For setup changes, run `.github/workflows/setup-smoke.ps1` against the published executable using a run-owned `-RunRoot`. See [CLI and saved configuration](features/cli-config.md) for defaults, unattended setup, cancellation, and preservation checks. Service setup is separately exercised by the disposable Windows/Linux service smoke; the local helper never installs a service.
+
 ## Evidence
 
 Each run writes proof to `.artifacts/verification/<run-id>/` and temporary state to `work/verification/<run-id>/`. The evidence includes the executable inventory and SHA-256, command stdout and stderr with exit codes, health, configuration actions, doctor JSON, concurrent registration responses, exact callback locations and received targets, lease renewal and expiry, deregistration, and per-process cleanup records.

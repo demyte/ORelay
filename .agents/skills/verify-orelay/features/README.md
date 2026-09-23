@@ -4,7 +4,7 @@ The map follows the user-visible surfaces in the current checkout. The PowerShel
 
 | Feature | User entry point | Proof file |
 | --- | --- | --- |
-| CLI and saved configuration | `orelay init` and `orelay config` | [cli-config.md](cli-config.md) |
+| Setup, CLI, and saved configuration | `orelay setup`, `orelay init`, and `orelay config` | [cli-config.md](cli-config.md) |
 | Callback relay and leases | `orelay server` plus `/registrations` and `/callback` | [relay-leases.md](relay-leases.md) |
 | Discovery and doctor | `orelay doctor` and `autoDiscovery` settings | [discovery-doctor.md](discovery-doctor.md) |
 | Aspire hosting package | `WithORelay` in a consuming AppHost | [aspire.md](aspire.md) |

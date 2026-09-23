@@ -11,6 +11,26 @@ Use `orelay <command> --help` for syntax. Global options can appear before or af
 
 Version output includes the SemVer version and source commit, for example `0.2.0-rc.1+<commit>`. The same stamp is embedded in the executable. See [versions and releases](releases.md) for tag and development-build rules.
 
+## Setup
+
+Run `orelay setup` for guided configuration. The first screen shows the defaults and offers **Go with defaults** or **Customize**. Defaults mean local access at `127.0.0.1:12987`, callback URL `http://localhost:12987/callback`, no discovery, a five-minute lease, capacity for 1,000 registrations, and foreground operation without a service or boot startup. Review the summary and confirm to save. Setup prints the foreground command rather than keeping the installer terminal occupied.
+
+Custom setup asks about local, LAN, or Tailscale access, port, bind address, advertised hostname, and foreground or service operation. Windows and Linux service setup also asks for the service name, whether to start it now, and whether to start it at boot. Starting an already running service restarts it to load the saved settings. macOS supports foreground operation only.
+
+Tailscale must already be installed and connected. Setup checks discovery before saving. The Tailscale preset binds all IPv4 interfaces and discovers the advertised hostname; it does not restrict access to the tailnet or configure firewall rules. Choose a specific interface address when needed. LAN access defaults to the machine hostname. Confirm that the browser and consuming apps can reach the advertised address. Shared management has no authentication in this version.
+
+Existing configurations are offered as the starting point. Interactive cancellation or ended input applies no changes. Setup saves the reviewed settings in one atomic write and rejects concurrent configuration changes. `--if-needed` skips setup when a valid file already exists, as does `--defaults`. Use plain `setup` to revisit an installation.
+
+For unattended operation, use `--yes`. It accepts the displayed choices without prompting and can be combined with `--json`:
+
+```text
+orelay setup --defaults --yes
+orelay --config-file /data/orelay.json setup --yes --access lan --port 13000 --bind 192.168.1.20 --hostname relay.example.test
+orelay --config-file <absolute-config-path> setup --yes --access tailscale --mode service --name orelay-dev --enable-startup --start
+```
+
+Service setup requires administrative privileges and a stable published executable. Setup checks the selected service's ownership before saving, but later service-manager actions can fail. In that case, the saved configuration and any completed service actions remain applied. Correct the reported problem and rerun with the same name and configuration path. Service mode without `--enable-startup` selects manual startup. Foreground mode leaves existing service installations in place.
+
 ## Configuration
 
 ```text
@@ -25,7 +45,7 @@ orelay config clear port
 
 The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic replacement, so simultaneous CLI updates preserve unrelated settings. The sibling `.lock` file can remain after use; the operating-system lock is held only during an update.
 
-| Config key | Flag for `init` and `server` | Default |
+| Config key | Flag for `init`, `setup`, and `server` | Default |
 | --- | --- | --- |
 | `port` | `--port` | `12987` |
 | `bind` | `--bind` | `127.0.0.1` |
@@ -82,6 +102,8 @@ orelay --config-file <absolute-config-path> service start
 orelay --config-file <absolute-config-path> service status --json
 orelay --config-file <absolute-config-path> service restart
 orelay --config-file <absolute-config-path> service stop
+orelay --config-file <absolute-config-path> service enable
+orelay --config-file <absolute-config-path> service disable
 orelay --config-file <absolute-config-path> service uninstall
 ```
 
@@ -89,7 +111,7 @@ Install from a stable executable location with the selected config already initi
 
 The installed definition records absolute executable and config paths. Use the same paths for later management commands. Conflicting definitions are reported instead of overwritten. Uninstall preserves the config, registration database, and executable. A service restart preserves unexpired registrations just like a foreground restart.
 
-Use `--name <name>` on service commands and doctor to select another service identity. Windows defaults to `ORelay`, running as LocalSystem with demand start. Linux defaults to `orelay.service`, running as root. Install creates the definition but does not start it or enable boot-time startup. Linux operators can separately run `sudo systemctl enable orelay.service` when they want boot-time startup. Grant the service account access to the chosen configuration directory.
+Use `--name <name>` on service commands and doctor to select another service identity. Windows defaults to `ORelay`, running as LocalSystem with demand start. Linux defaults to `orelay.service`, running as root. Install creates the definition but does not start it or enable boot-time startup. `service enable` selects automatic boot startup; `service disable` restores manual startup without stopping the service. Grant the service account access to the chosen configuration directory.
 
 ## Installation and updates
 
@@ -101,6 +123,8 @@ orelay --config-file <absolute-config-path> update --restart-service --name <ser
 ```
 
 `install` copies the running native executable to a stable directory. The default is `%LOCALAPPDATA%\ORelay` on Windows and `~/.local/bin` on Unix. It preserves existing configuration and registration data. Add the directory to your `PATH`; the command does not edit shell profiles or install a service. The repository's `install.ps1` and `install.sh` bootstraps download a verified release and invoke this command.
+
+After installation, the bootstrap runs `setup --if-needed` from the installed executable when a terminal is available. Existing configuration is preserved on repeat installs. Pass `-Defaults` to the PowerShell script or `--defaults` to the shell script to accept local foreground defaults without questions. Pass `-SkipSetup` or `--skip-setup` to install only. Without a terminal, setup is skipped unless defaults were explicitly requested; the script prints the command to run later. Script options `-ConfigFile`/`--config-file` and `-Name`/`--name` also apply to setup.
 
 `update --check` reads the latest stable GitHub release. `update` verifies the matching archive checksum and executable version before replacing the installed binary. Development builds are never implicitly downgraded to an older stable release. Managed `dotnet run` builds do not support installation or updates.
 

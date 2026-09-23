@@ -7,9 +7,11 @@ install_dir=''
 config_file=''
 service_name=''
 restart_service=0
+setup_defaults=0
+skip_setup=0
 
 usage() {
-    printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--install-dir PATH] [--config-file PATH] [--restart-service] [--name SERVICE]'
+    printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--install-dir PATH] [--config-file PATH] [--restart-service] [--name SERVICE] [--defaults | --skip-setup]'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -27,10 +29,15 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || { usage >&2; exit 2; }
             service_name=$2; shift 2 ;;
         --restart-service) restart_service=1; shift ;;
+        --defaults) setup_defaults=1; shift ;;
+        --skip-setup) skip_setup=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
 done
+[ "$setup_defaults" -eq 0 ] || [ "$skip_setup" -eq 0 ] || {
+    printf '%s\n' '--defaults and --skip-setup cannot be used together.' >&2; exit 2;
+}
 
 case "$(uname -s)" in
     Linux) os=linux ;;
@@ -138,4 +145,28 @@ set -- install --install-dir "$install_dir"
 [ -z "$service_name" ] || set -- "$@" --name "$service_name"
 [ "$restart_service" -eq 0 ] || set -- "$@" --restart-service
 "$exe" "$@"
-exit $?
+install_status=$?
+[ "$install_status" -eq 0 ] || exit "$install_status"
+
+installed="$install_dir/orelay"
+set -- setup --if-needed
+[ -z "$config_file" ] || set -- "$@" --config-file "$config_file"
+[ -z "$service_name" ] || set -- "$@" --name "$service_name"
+print_setup_next_step() {
+    printf 'Installed executable: %s\n' "$installed"
+    printf '%s\n' 'Run it with: setup --if-needed'
+    [ -z "$config_file" ] || printf '  --config-file: %s\n' "$config_file"
+    [ -z "$service_name" ] || printf '  --name: %s\n' "$service_name"
+}
+if [ "$skip_setup" -eq 1 ]; then
+    print_setup_next_step
+elif [ "$setup_defaults" -eq 1 ]; then
+    "$installed" "$@" --defaults --yes
+else
+    # A piped installer owns standard input. The wizard must use the terminal directly.
+    if [ -t 1 ] && ( : </dev/tty ) 2>/dev/null && ( test -t 3 ) 3</dev/tty 2>/dev/null; then
+        "$installed" "$@" </dev/tty
+    else
+        print_setup_next_step
+    fi
+fi

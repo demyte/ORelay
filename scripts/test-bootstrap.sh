@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if command -v setsid >/dev/null 2>&1; then no_tty=setsid; else no_tty=; fi
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/orelay-bootstrap-test.XXXXXXXX")
 cleanup() { rm -rf -- "$test_root"; }
 trap cleanup EXIT HUP INT TERM
@@ -68,8 +69,22 @@ chmod +x "$test_root/failing-sha256sum/sha256sum"
 
 cat > "$test_root/payload/orelay" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$@" > "$ARG_LOG"
-exit "${FIXTURE_EXIT:-0}"
+case "$1" in
+  install)
+    printf '%s\n' "$@" > "$ARG_LOG"
+    [ "${FIXTURE_EXIT:-0}" -eq 0 ] || exit "$FIXTURE_EXIT"
+    shift
+    [ "$1" = --install-dir ]; shift
+    dest=$1
+    mkdir -p "$dest"
+    cp "$0" "$dest/orelay"
+    ;;
+  setup)
+    printf '%s\n' "$0" "$@" > "$SETUP_LOG"
+    exit "${FIXTURE_SETUP_EXIT:-0}"
+    ;;
+  *) exit 88 ;;
+esac
 EOF
 chmod +x "$test_root/payload/orelay"
 for rid in linux-x64 linux-arm64 osx-x64 osx-arm64; do
@@ -81,8 +96,8 @@ done
 
 run_install() {
   if [ "${FIXTURE_FORCE_SHASUM:-}" = 1 ]; then script_path="$test_root/failing-sha256sum:$test_root/bin:$PATH"; else script_path="$test_root/bin:$PATH"; fi
-  PATH="$script_path" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" ARG_LOG="$test_root/args" \
-    "$@" sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" \
+  PATH="$script_path" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" \
+    $no_tty "$@" sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" \
     --config-file "$test_root/state file.json" --name 'relay service' --restart-service
 }
 
@@ -92,6 +107,42 @@ grep -Fxq "$test_root/install path" "$test_root/args"
 grep -Fxq "$test_root/state file.json" "$test_root/args"
 grep -Fxq 'relay service' "$test_root/args"
 grep -Fxq -- '--restart-service' "$test_root/args"
+[ ! -e "$test_root/setup-args" ] || { printf 'Unattended install started the wizard.\n' >&2; exit 1; }
+printf '%s\n' 'script source must never become wizard input' | \
+  run_install env FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 > "$test_root/piped-output"
+[ ! -e "$test_root/setup-args" ] || { printf 'Piped install started the wizard without a terminal.\n' >&2; exit 1; }
+
+PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+  ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
+  $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" \
+  --config-file "$test_root/state file.json" --name 'relay service' --defaults
+[ "$(sed -n '1p' "$test_root/setup-args")" = "$test_root/install path/orelay" ] || {
+  printf 'Setup did not run from the installed executable.\n' >&2; exit 1;
+}
+for arg in setup --if-needed --defaults --yes "$test_root/state file.json" 'relay service'; do
+  grep -Fxq -- "$arg" "$test_root/setup-args" || { printf 'Missing setup argument: %s\n' "$arg" >&2; exit 1; }
+done
+if PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+  ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 FIXTURE_SETUP_EXIT=23 \
+  $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" --defaults >/dev/null 2>&1; then
+  printf 'Setup failure was not passed through.\n' >&2; exit 1
+else
+  status=$?
+  [ "$status" -eq 23 ] || { printf 'Expected setup exit code 23, got %s.\n' "$status" >&2; exit 1; }
+fi
+rm -f "$test_root/setup-args"
+PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+  ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
+  $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" \
+  --config-file "$test_root/state file.json" --name 'relay service' --skip-setup > "$test_root/skip-output"
+[ ! -e "$test_root/setup-args" ] || { printf 'Skip setup started the wizard.\n' >&2; exit 1; }
+grep -Fxq "Installed executable: $test_root/install path/orelay" "$test_root/skip-output"
+grep -Fxq 'Run it with: setup --if-needed' "$test_root/skip-output"
+grep -Fxq -- "  --config-file: $test_root/state file.json" "$test_root/skip-output"
+grep -Fxq -- '  --name: relay service' "$test_root/skip-output"
+if sh "$root/install.sh" --defaults --skip-setup > /dev/null 2>&1; then
+  printf 'Conflicting setup flags were accepted.\n' >&2; exit 1
+fi
 
 for pair in 'Linux x86_64 linux-x64' 'Linux aarch64 linux-arm64' 'Darwin x86_64 osx-x64' 'Darwin arm64 osx-arm64'; do
   set -- $pair
@@ -105,8 +156,8 @@ fi
 # Public installs do not need gh, even if an unrelated token is in the environment.
 PATH="$test_root/bin:$PATH" FIXTURE_NO_GH=1 FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
   FIXTURE_ROOT="$test_root/fixture" HOME="$test_root/home" TMPDIR="$test_root/tmp" \
-  GH_TOKEN=unused-fixture-token ARG_LOG="$test_root/public-args" \
-  sh "$root/install.sh" --install-dir "$test_root/public install"
+  GH_TOKEN=unused-fixture-token ARG_LOG="$test_root/public-args" SETUP_LOG="$test_root/public-setup-args" \
+  $no_tty sh "$root/install.sh" --install-dir "$test_root/public install"
 grep -Fxq "$test_root/public install" "$test_root/public-args"
 
 if run_install env FIXTURE_OS=Darwin FIXTURE_ARCH=arm64 >/dev/null 2>&1; then

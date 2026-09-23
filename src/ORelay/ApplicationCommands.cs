@@ -6,6 +6,7 @@ using ORelay.Diagnostics;
 using ORelay.Discovery;
 using ORelay.Server;
 using ORelay.Services;
+using ORelay.Setup;
 using ORelay.Updating;
 
 namespace ORelay;
@@ -21,6 +22,8 @@ internal static class ApplicationCommands
                 case CliCommand.Init:
                 case CliCommand.Config:
                     return await ConfigurationCommand.ExecuteAsync(options, output, error).ConfigureAwait(false);
+                case CliCommand.Setup:
+                    return await SetupCommand.ExecuteAsync(options, output, error).ConfigureAwait(false);
                 case CliCommand.Server:
                     var store = new RelayConfigurationStore(options.ConfigFile);
                     store.Init(options.SettingsPatch);

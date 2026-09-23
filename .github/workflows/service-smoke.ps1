@@ -449,7 +449,7 @@ function Invoke-WindowsUnprivilegedInstallProof {
 function Invoke-ServiceAction {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('install', 'start', 'status', 'stop', 'restart', 'uninstall')]
+        [ValidateSet('install', 'start', 'status', 'stop', 'restart', 'uninstall', 'enable', 'disable')]
         [string]$Action,
 
         [Parameter(Mandatory = $true)]
@@ -525,6 +525,35 @@ function Assert-ServiceResult {
     if ($ExpectedState -and $ActionResult.Result.state -ne $ExpectedState) {
         throw "Service '$($ActionResult.Action)' returned state '$($ActionResult.Result.state)', expected '$ExpectedState'."
     }
+}
+
+function Assert-ServiceBootMode {
+    param([string]$Name, [bool]$Enabled)
+
+    if ($script:IsLinuxPlatform) {
+        $actual = Invoke-PrivilegedProcess -FilePath 'systemctl' -Arguments @('is-enabled', "$Name.service") `
+            -EvidenceName "service-$Name-boot-$Enabled"
+        $expected = if ($Enabled) { 'enabled' } else { 'disabled' }
+        if ($actual.StandardOutput.Trim() -cne $expected) {
+            throw "Systemd boot setting for '$Name' was '$($actual.StandardOutput.Trim())', expected '$expected'."
+        }
+    }
+    else {
+        $sc = Join-Path $env:SystemRoot 'System32\sc.exe'
+        $actual = Invoke-PrivilegedProcess -FilePath $sc -Arguments @('qc', $Name) `
+            -EvidenceName "service-$Name-boot-$Enabled"
+        $expected = if ($Enabled) { 'AUTO_START' } else { 'DEMAND_START' }
+        if ($actual.ExitCode -ne 0 -or $actual.StandardOutput -cnotmatch $expected) {
+            throw "Windows boot setting for '$Name' did not report '$expected'."
+        }
+    }
+
+    Write-ServiceEvidence -Name "service-$Name-boot-$Enabled.json" -Value ([ordered]@{
+            ServiceName = $Name
+            Enabled = $Enabled
+            NativeExitCode = $actual.ExitCode
+            NativeOutput = $actual.StandardOutput
+        })
 }
 
 function Invoke-HttpRequest {
@@ -1032,6 +1061,19 @@ try {
         throw 'Repeated service install unexpectedly changed the owned definition.'
     }
 
+    Assert-ServiceBootMode -Name $serviceName -Enabled $false
+    $enable = Invoke-ServiceAction -Action enable -Name $serviceName
+    Assert-ServiceResult -ActionResult $enable -ExpectedState 'Stopped'
+    if (-not $enable.Result.changed) { throw 'First service enable did not change boot startup.' }
+    Assert-ServiceBootMode -Name $serviceName -Enabled $true
+    $enableAgain = Invoke-ServiceAction -Action enable -Name $serviceName
+    Assert-ServiceResult -ActionResult $enableAgain -ExpectedState 'Stopped'
+    if ($enableAgain.Result.changed) { throw 'Repeated service enable changed boot startup.' }
+    $disable = Invoke-ServiceAction -Action disable -Name $serviceName
+    Assert-ServiceResult -ActionResult $disable -ExpectedState 'Stopped'
+    if (-not $disable.Result.changed) { throw 'Service disable did not change boot startup.' }
+    Assert-ServiceBootMode -Name $serviceName -Enabled $false
+
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action start -Name $serviceName) -ExpectedState 'Running'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action start -Name $serviceName) -ExpectedState 'Running'
@@ -1065,6 +1107,23 @@ try {
 
     Assert-InstallTransition -SourcePath $ExecutablePath -EvidenceName 'service-install-replace-running' `
         -ExpectedState 'Running' -Client $httpClient -Callback $callback -Port $port
+
+    $setup = Invoke-PrivilegedProcess -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath,
+        'setup', '--yes', '--mode', 'service', '--name', $serviceName,
+        '--enable-startup', '--start', '--json'
+    ) -EvidenceName 'service-setup-production'
+    $setupResult = $setup.StandardOutput | ConvertFrom-Json
+    if ($setup.ExitCode -ne 0 -or -not $setupResult.succeeded -or $setupResult.serviceName -cne $serviceName) {
+        throw "Production setup did not configure the owned service: $($setupResult.message)"
+    }
+    Assert-ServiceBootMode -Name $serviceName -Enabled $true
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-setup-production-callback'
+    Write-ServiceEvidence -Name 'service-setup-production.json' -Value $setupResult
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action disable -Name $serviceName) -ExpectedState 'Running'
+    Assert-ServiceBootMode -Name $serviceName -Enabled $false
 
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
     Assert-InstallTransition -SourcePath $NextExecutablePath -EvidenceName 'service-install-preserve-stopped' `

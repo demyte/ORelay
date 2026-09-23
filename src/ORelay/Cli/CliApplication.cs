@@ -78,6 +78,7 @@ public static class CliApplication
         builder.AppendLine("                   Select the configuration file for this command.");
         builder.AppendLine();
         builder.AppendLine("Commands:");
+        builder.AppendLine("  setup            Configure the relay interactively or accept defaults.");
         builder.AppendLine("  init             Create the selected configuration file.");
         builder.AppendLine("  install          Install this executable to a stable directory.");
         builder.AppendLine("  update           Check for or install the latest stable release.");
@@ -100,6 +101,23 @@ public static class CliApplication
         var builder = new StringBuilder();
         switch (request.Command)
         {
+            case CliCommand.Setup:
+                builder.AppendLine("Usage:");
+                builder.AppendLine("  orelay setup [--defaults] [--yes] [--if-needed] [--config-file <path>]");
+                builder.AppendLine("    [--access <local|lan|tailscale>] [--port <number>] [--bind <address>]");
+                builder.AppendLine("    [--hostname <host>] [--public-url <url>] [--auto-discovery <none|local|tailscale>]");
+                builder.AppendLine("    [--lease-seconds <number>] [--max-registrations <number>]");
+                builder.AppendLine("    [--mode <foreground|service>] [--name <service>] [--start] [--enable-startup] [--json]");
+                builder.AppendLine();
+                builder.AppendLine("Show defaults or customize settings, then confirm before applying them.");
+                builder.AppendLine("Defaults: local access, 127.0.0.1:12987, callback http://localhost:12987/callback,");
+                builder.AppendLine("no discovery, foreground operation, no service or boot startup.");
+                builder.AppendLine("--yes applies without questions. JSON and redirected input require --yes.");
+                builder.AppendLine("--defaults and --if-needed preserve an existing valid configuration.");
+                builder.AppendLine("--start starts or restarts the selected service. --enable-startup enables boot startup.");
+                builder.AppendLine("Service mode requires Windows/Linux administrative privileges; it does not elevate.");
+                builder.AppendLine("Example: orelay setup --defaults --yes");
+                break;
             case CliCommand.Update:
                 builder.AppendLine("Usage:");
                 builder.AppendLine("  orelay update [--check] [--restart-service] [--name <service>]");
@@ -145,10 +163,11 @@ public static class CliApplication
                 break;
             case CliCommand.Service:
                 builder.AppendLine("Usage:");
-                builder.AppendLine("  orelay service <install|start|stop|restart|status|uninstall>");
+                builder.AppendLine("  orelay service <install|start|stop|restart|status|uninstall|enable|disable>");
                 builder.AppendLine("    [--name <service>] [--config-file <path>] [--json]");
                 builder.AppendLine();
                 builder.AppendLine("Install or control the service owned by this executable.");
+                builder.AppendLine("enable/disable change boot startup without starting or stopping the service.");
                 break;
             default:
                 builder.Append(GetHelpText());

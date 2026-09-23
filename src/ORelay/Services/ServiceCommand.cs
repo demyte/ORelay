@@ -48,6 +48,8 @@ public static class ServiceCommand
             ServiceAction.Restart => ServiceOperation.Restart,
             ServiceAction.Status => ServiceOperation.Status,
             ServiceAction.Uninstall => ServiceOperation.Uninstall,
+            ServiceAction.Enable => ServiceOperation.Enable,
+            ServiceAction.Disable => ServiceOperation.Disable,
             _ => throw new ArgumentOutOfRangeException(nameof(options), options.Service.Action, "Unknown service action."),
         };
 

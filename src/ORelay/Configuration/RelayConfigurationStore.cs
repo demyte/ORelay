@@ -139,6 +139,22 @@ public sealed class RelayConfigurationStore
 
     public RelaySettings Load(RelaySettingsPatch? invocationOverrides = null) => Read(invocationOverrides);
 
+    /// <summary>Save a reviewed setup in one write, refusing concurrent changes.</summary>
+    public void SaveSetup(RelaySettings settings, RelaySettings? expectedSettings)
+    {
+        RelaySettingsValidator.Validate(settings, FilePath);
+        using var fileLock = AcquireLock();
+        var document = ReadDocumentIfPresent();
+        var current = document is null ? null : ResolveSettings(document.ToPatch());
+        if (current != expectedSettings)
+        {
+            throw new RelayConfigurationException(RelayConfigurationErrorCode.Conflict,
+                $"Configuration changed during setup. Run setup again to review it. Selected file: '{FilePath}'.", FilePath);
+        }
+
+        if (current != settings) WriteDocument(RelayConfigurationDocument.FromSettings(settings));
+    }
+
     public Task<RelaySettings> ReadAsync(
         RelaySettingsPatch? invocationOverrides = null,
         CancellationToken cancellationToken = default)

@@ -2,7 +2,7 @@
 
 ## Source and commands
 
-`install.ps1` and `install.sh` select a native release, verify its checksum, and invoke the downloaded executable's `install` command. `src/ORelay/Updating` owns release discovery, downloads, extraction, executable replacement, and rollback. `CliParser` exposes `install`, `update`, `--check`, and the explicit service restart flags.
+`install.ps1` and `install.sh` select a native release, verify its checksum, and invoke the downloaded executable's `install` command. After a successful install, they run `setup --if-needed` from the installed executable when a console is available. `-Defaults` or `--defaults` runs setup unattended with `--defaults --yes`; `-SkipSetup` or `--skip-setup` prints the installed path and setup arguments for later use. The two flags cannot be combined. `src/ORelay/Updating` owns release discovery, downloads, extraction, executable replacement, and rollback. `CliParser` exposes `install`, `setup`, `update`, `--check`, and the explicit service restart flags.
 
 ```text
 orelay install --install-dir <run-owned-directory> --json
@@ -19,7 +19,7 @@ dotnet test tests/ORelay.Tests --filter FullyQualifiedName~Updating
 powershell.exe -NoProfile -File scripts/test-bootstrap.ps1
 ```
 
-Run the Windows fixture with Windows PowerShell 5.1, which compiles its small fixture executable. On Unix, run `sh scripts/test-bootstrap.sh`. These fixtures control downloads and destinations; they must reject corrupt checksums and missing assets before executing a downloaded candidate.
+Run the Windows fixture with Windows PowerShell 5.1, which compiles its small fixture executable. On Unix, run `sh scripts/test-bootstrap.sh`. These fixtures control downloads and destinations; they must reject corrupt checksums and missing assets before executing a downloaded candidate. They also check that setup runs from the installed path, keeps config and service arguments, skips without a terminal, honors unattended defaults and skip flags, and passes through install or setup failures. For a live interactive check, pipe the installer source into a shell with a real terminal. Confirm that setup reads from the terminal rather than consuming the piped source. Use only a run-owned install directory and config.
 
 `UpdateEngineTests.Replacement_StopStatusFailure*` covers both install and update when a running service stops but the following status check fails. The original executable must remain intact, and recovery must restart the service and verify health. If recovery fails, the result must explicitly report that failure. The denied-stop test also proves that a service which remains running receives no start command. These tests inject service failures and do not claim native service-manager coverage.
 
