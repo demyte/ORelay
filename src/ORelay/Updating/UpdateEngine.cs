@@ -191,7 +191,7 @@ public sealed class UpdateEngine
         var backup = target + ".backup-" + Guid.NewGuid().ToString("N");
         var hadTarget = File.Exists(target);
         var replaced = false;
-        var stoppedService = false;
+        var restoreRunningService = false;
         try
         {
             await File.WriteAllBytesAsync(stage, bytes, cancellationToken);
@@ -211,12 +211,13 @@ public sealed class UpdateEngine
                 throw new UpdateException(UpdateErrorCode.VersionMismatch, "The candidate executable reports a different version.");
             if (restart && service.Request is not null && service.State == ServiceState.Running)
             {
+                // The stop can take effect even when its confirmation fails.
+                restoreRunningService = true;
                 var stopped = _services.Execute(ServiceOperation.Stop, service.Request);
                 if (!stopped.Succeeded || _services.Execute(ServiceOperation.Status, service.Request) is not
                     { Succeeded: true, State: ServiceState.Stopped })
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
-                        "The selected service could not be stopped. The executable was not changed.");
-                stoppedService = true;
+                        "The service stop could not be confirmed. The executable was not changed.");
             }
             if (hadTarget) File.Move(target, backup);
             try
@@ -235,7 +236,7 @@ public sealed class UpdateEngine
                 throw new UpdateException(UpdateErrorCode.VersionMismatch,
                     "The installed executable reports a different version. The previous executable will be restored.");
 
-            if (stoppedService && service.Request is not null)
+            if (restoreRunningService && service.Request is not null)
             {
                 var started = _services.Execute(ServiceOperation.Start, service.Request);
                 var healthy = started.Succeeded && _services.Execute(ServiceOperation.Status, service.Request) is
@@ -244,7 +245,7 @@ public sealed class UpdateEngine
                 if (!healthy)
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
                         "The service did not start healthy. The previous executable will be restored.");
-                stoppedService = false;
+                restoreRunningService = false;
             }
 
             var message = $"ORelay {nextVersion} installed at '{target}'.";
@@ -275,7 +276,7 @@ public sealed class UpdateEngine
                                 { Succeeded: true, State: ServiceState.Stopped })
                                 throw new IOException("Could not stop the failed service before rollback.");
                         }
-                        stoppedService = true;
+                        restoreRunningService = true;
                     }
                     File.Move(target, stage);
                     if (hadTarget) File.Move(backup, target);
@@ -286,14 +287,19 @@ public sealed class UpdateEngine
                         $"Replacement failed and automatic rollback could not complete. Previous executable: '{backup}'.");
                 }
             }
-            if (stoppedService && service.Request is not null)
+            // A rejected stop may have left the original service running.
+            if (!replaced && restoreRunningService && service.Request is not null &&
+                _services.Execute(ServiceOperation.Status, service.Request) is
+                { Succeeded: true, State: ServiceState.Running })
+                restoreRunningService = false;
+            if (restoreRunningService && service.Request is not null)
             {
                 var restored = _services.Execute(ServiceOperation.Start, service.Request);
                 if (!restored.Succeeded || _services.Execute(ServiceOperation.Status, service.Request) is not
                     { Succeeded: true, State: ServiceState.Running } ||
                     !await VerifyHealthAsync(service.Request.ConfigurationPath, cancellationToken))
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
-                        "The previous executable was restored, but the service could not be restarted healthy.");
+                        "The previous executable is in place, but the service could not be restarted healthy.");
             }
             throw;
         }

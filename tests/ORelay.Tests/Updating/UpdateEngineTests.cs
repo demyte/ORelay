@@ -212,6 +212,66 @@ public sealed class UpdateEngineTests
         Assert.Empty(Directory.GetFiles(fixture.Directory, "orelay*.backup-*"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replacement_StopStatusFailureRestoresRunningServiceAndPreservesExecutable(bool install)
+    {
+        using var fixture = new Fixture();
+        fixture.Service.Installed = true;
+        fixture.Service.StatusFailsAfterStop = true;
+        if (install)
+        {
+            fixture.Runtime.ProcessPath = fixture.Source;
+            fixture.Runtime.CurrentVersion = fixture.Runtime.CandidateVersion;
+        }
+
+        var result = install ?
+            await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory, RestartService: true)) :
+            await fixture.Engine.UpdateAsync(new UpdateRequest(RestartService: true));
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.Changed);
+        Assert.Equal(UpdateErrorCode.ServiceFailure, result.ErrorCode);
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+        Assert.False(fixture.Service.IsStopped);
+        Assert.Equal(new[] { ServiceOperation.Stop, ServiceOperation.Start },
+            fixture.Service.Operations.Where(operation => operation != ServiceOperation.Status));
+        Assert.Single(fixture.Health.Urls);
+        Assert.Empty(Directory.GetFiles(fixture.Directory, "orelay*.backup-*"));
+        Assert.Empty(Directory.GetFiles(fixture.Directory, "orelay*.stage-*"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Replacement_StopStatusFailureReportsFailedServiceRecovery(bool install)
+    {
+        using var fixture = new Fixture();
+        fixture.Service.Installed = true;
+        fixture.Service.StatusFailsAfterStop = true;
+        fixture.Service.RestartFails = true;
+        if (install)
+        {
+            fixture.Runtime.ProcessPath = fixture.Source;
+            fixture.Runtime.CurrentVersion = fixture.Runtime.CandidateVersion;
+        }
+
+        var result = install ?
+            await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory, RestartService: true)) :
+            await fixture.Engine.UpdateAsync(new UpdateRequest(RestartService: true));
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.Changed);
+        Assert.Equal(UpdateErrorCode.ServiceFailure, result.ErrorCode);
+        Assert.Contains("service could not be restarted healthy", result.Message, StringComparison.Ordinal);
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+        Assert.True(fixture.Service.IsStopped);
+        Assert.Equal(new[] { ServiceOperation.Stop, ServiceOperation.Start },
+            fixture.Service.Operations.Where(operation => operation != ServiceOperation.Status));
+        Assert.Empty(fixture.Health.Urls);
+    }
+
     [Fact]
     public async Task Update_HealthFailureRestoresPreviousExecutableAndRunningService()
     {
@@ -297,12 +357,14 @@ public sealed class UpdateEngineTests
         public bool Installed { get; set; }
         public bool RestartFails { get; set; }
         public bool StopFails { get; set; }
+        public bool StatusFailsAfterStop { get; set; }
         public bool IsStopped { get => _stopped; set => _stopped = value; }
         public List<ServiceOperation> Operations { get; } = [];
         public List<ServiceRequest> Requests { get; } = [];
         public List<string> LifecycleExecutableContents { get; } = [];
         private bool _stopped;
         private bool _failedOnce;
+        private bool _statusFailedAfterStop;
 
         public ServiceOperationResult Execute(ServiceOperation operation, ServiceRequest request)
         {
@@ -315,6 +377,12 @@ public sealed class UpdateEngineTests
             if (operation == ServiceOperation.Stop && StopFails)
                 return ServiceOperationResult.Failure(Platform, operation, request.ServiceName,
                     ServiceState.Running, ServiceErrorCode.PermissionDenied, "access denied");
+            if (operation == ServiceOperation.Status && _stopped && StatusFailsAfterStop && !_statusFailedAfterStop)
+            {
+                _statusFailedAfterStop = true;
+                return ServiceOperationResult.Failure(Platform, operation, request.ServiceName,
+                    ServiceState.Unknown, ServiceErrorCode.ManagerUnavailable, "transient status failure");
+            }
             if (operation == ServiceOperation.Start && RestartFails && !_failedOnce)
             {
                 _failedOnce = true;

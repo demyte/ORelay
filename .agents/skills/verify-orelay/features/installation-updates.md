@@ -21,6 +21,8 @@ powershell.exe -NoProfile -File scripts/test-bootstrap.ps1
 
 Run the Windows fixture with Windows PowerShell 5.1, which compiles its small fixture executable. On Unix, run `sh scripts/test-bootstrap.sh`. These fixtures control downloads and destinations; they must reject corrupt checksums and missing assets before executing a downloaded candidate.
 
+`UpdateEngineTests.Replacement_StopStatusFailure*` covers both install and update when a running service stops but the following status check fails. The original executable must remain intact, and recovery must restart the service and verify health. If recovery fails, the result must explicitly report that failure. The denied-stop test also proves that a service which remains running receives no start command. These tests inject service failures and do not claim native service-manager coverage.
+
 ## Native proof
 
 Install the current executable into a fresh run-owned directory. Check `--version --json`, compare source and installed SHA-256, and repeat installation to prove the no-change result. Keep a config and database beside the target and verify their bytes survive replacement. Test directory names containing spaces. Verify an invalid target fails without overwriting unrelated files.
