@@ -10,7 +10,9 @@ public enum CliCommand
     Config,
     Server,
     Doctor,
-    Service
+    Service,
+    Update,
+    Install
 }
 
 public enum ConfigAction
@@ -38,6 +40,10 @@ public sealed record DoctorCommandOptions(bool Fix, string? Name = null);
 
 public sealed record ServiceCommandOptions(ServiceAction Action, string? Name = null);
 
+public sealed record UpdateCommandOptions(bool Check, bool RestartService, string? Name = null);
+
+public sealed record InstallCommandOptions(string? InstallDirectory, bool RestartService, string? Name = null);
+
 public sealed record CliHelpRequest(CliCommand Command, string? Topic);
 
 public sealed record CliOptions(
@@ -49,7 +55,9 @@ public sealed record CliOptions(
     DoctorCommandOptions? Doctor = null,
     ServiceCommandOptions? Service = null,
     CliHelpRequest? Help = null,
-    RelaySettingsPatch? SettingsPatch = null);
+    RelaySettingsPatch? SettingsPatch = null,
+    UpdateCommandOptions? Update = null,
+    InstallCommandOptions? Install = null);
 
 public sealed record CliParseResult(CliOptions? Options, string? Error)
 {

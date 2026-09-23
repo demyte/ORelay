@@ -130,7 +130,7 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
 
     [RelayProcessFact]
     [Trait("Category", "AspireIntegration")]
-    public async Task RealRelayProcessRestartRejectsPendingFlowUntilExplicitResourceRestart()
+    public async Task RealRelayProcessRestartKeepsPendingFlowAndAppHostRegistration()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         var ct = timeout.Token;
@@ -149,7 +149,7 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
             var start = new ProcessStartInfo(binary.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? "dotnet" : binary)
             { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = runDirectory };
             if (binary.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) start.ArgumentList.Add(binary);
-            foreach (var arg in new[] { "server", "--config-file", Path.Combine(runDirectory, "orelay.json"), "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--lease-seconds", "6" }) start.ArgumentList.Add(arg);
+            foreach (var arg in new[] { "server", "--config-file", Path.Combine(runDirectory, "orelay.json"), "--port", port.ToString(System.Globalization.CultureInfo.InvariantCulture), "--hostname", "127.0.0.1", "--lease-seconds", "30" }) start.ArgumentList.Add(arg);
             return Process.Start(start) ?? throw new InvalidOperationException("Unable to start owned relay process.");
         }
         async Task Ready()
@@ -178,27 +178,29 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
             using var manualBrowser = new HttpClient(new HttpClientHandler { CookieContainer = cookies, AllowAutoRedirect = false }) { BaseAddress = browser.BaseAddress };
             var original = await browser.GetFromJsonAsync<SampleSession>("/sample/session", ct);
             using var login = await manualBrowser.GetAsync("/login", ct);
+            Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
+            var loginQuery = QueryHelpers.ParseQuery(login.Headers.Location!.Query);
+            Assert.Equal(new Uri(new Uri(server), "/callback").AbsoluteUri, loginQuery["redirect_uri"].ToString());
+            Assert.Equal("code", loginQuery["response_type"].ToString());
             using var authorize = await manualBrowser.GetAsync(login.Headers.Location, ct);
             Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
             var pendingCallback = authorize.Headers.Location;
             relayProcess.Kill(entireProcessTree: true);
             await relayProcess.WaitForExitAsync(ct);
-            await WaitForAsync(async () => (await app.Services.GetRequiredService<HealthCheckService>().CheckHealthAsync(ct)).Entries["orelay-api"].Description!.Contains("Restart", StringComparison.Ordinal), ct);
+            Assert.True(File.Exists(Path.ChangeExtension(Path.Combine(runDirectory, "orelay.json"), "registrations.db")));
             relayProcess.Dispose();
             relayProcess = Launch();
             await Ready();
-            using var staleCallback = await manualBrowser.GetAsync(pendingCallback, ct);
-            Assert.Equal(HttpStatusCode.NotFound, staleCallback.StatusCode);
+            using var persistedCallback = await manualBrowser.GetAsync(pendingCallback, ct);
+            Assert.Equal(HttpStatusCode.Redirect, persistedCallback.StatusCode);
+            using var completedFlow = await browser.GetAsync(pendingCallback, ct);
+            Assert.Equal(HttpStatusCode.OK, completedFlow.StatusCode);
+            var result = await completedFlow.Content.ReadFromJsonAsync<FlowResult>(ct);
+            Assert.True(result!.StateValidated);
+            Assert.True(result.DirectCodeExchange);
             Assert.Equal(original!.RegistrationId, (await browser.GetFromJsonAsync<SampleSession>("/sample/session", ct))!.RegistrationId);
-            var restarted = await app.Services.GetRequiredService<ResourceCommandService>().ExecuteCommandAsync("api", "restart", ct);
-            Assert.True(restarted.Success, restarted.Message);
-            await WaitForAsync(async () =>
-            {
-                try { return (await browser.GetFromJsonAsync<SampleSession>("/sample/session", ct))!.RegistrationId != original.RegistrationId; }
-                catch (HttpRequestException) { return false; }
-            }, ct);
             await CompleteFlowAsync(browser, ct);
-            output.WriteLine("Killed and restarted the owned real CLI relay. Pending callback returned 404; explicit resource restart supplied a fresh ID and completed a new flow.");
+            output.WriteLine("Killed and restarted the owned real CLI relay. The pending flow completed with the original registration ID while the AppHost stayed running.");
             await app.StopAsync(ct);
         }
         finally
@@ -209,6 +211,7 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
                 await relayProcess.WaitForExitAsync(CancellationToken.None);
                 relayProcess.Dispose();
             }
+            Directory.Delete(runDirectory, recursive: true);
         }
     }
 

@@ -13,5 +13,10 @@ if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = "$PSScriptRoot\..\artifacts\publish\$RuntimeIdentifier"
 }
 
+& "$PSScriptRoot/build-sqlite.ps1" -RuntimeIdentifier $RuntimeIdentifier
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 dotnet publish $project --configuration $Configuration --runtime $RuntimeIdentifier --self-contained true --output $OutputPath
-exit $LASTEXITCODE
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+exit 0

@@ -41,5 +41,5 @@ Sources: `src/ORelay/Server/RelayServerHost.cs`, `RelayServerLog.cs`, and `Relay
 
 - Loopback server mode allows loopback callback destinations. Non-loopback destinations require an effective non-loopback bind supplied in saved configuration or invocation flags.
 - The registration ID is a routing identifier, not a credential. Management access is open in this version.
-- A relay restart loses registrations. The callback query is never exchanged for a token by ORelay.
+- The selected config path determines the persistent SQLite file. A relay restart preserves unexpired registrations; expiry during downtime still prevents routing and renewal. The callback query is never exchanged for a token by ORelay.
 - `QueryString.Value` is the raw input used for the redirect. Do not replace this proof with a parsed dictionary comparison.

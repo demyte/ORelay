@@ -155,6 +155,8 @@ public static class CliParser
             "server" => ParseServer(arguments, isJson, configFile, settings),
             "doctor" => ParseDoctor(arguments, isJson, configFile, settings),
             "service" => ParseService(arguments, isJson, configFile, settings, requestedHelp),
+            "update" => ParseInstallation(arguments, isJson, configFile, settings, install: false),
+            "install" => ParseInstallation(arguments, isJson, configFile, settings, install: true),
             _ => CliParseResult.Failure($"unknown command '{command}'")
         };
     }
@@ -360,6 +362,71 @@ public static class CliParser
             isJson,
             configFile,
             Service: new ServiceCommandOptions(action, serviceName)));
+    }
+
+    private static CliParseResult ParseInstallation(
+        List<string> arguments,
+        bool isJson,
+        string? configFile,
+        RelaySettingsPatch? settings,
+        bool install)
+    {
+        if (settings is not null)
+        {
+            return CliParseResult.Failure("setting options can only be used with init or server");
+        }
+
+        var check = false;
+        var restartService = false;
+        string? name = null;
+        string? directory = null;
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (!install && argument == "--check")
+            {
+                if (check) return CliParseResult.Failure("--check may be specified only once");
+                check = true;
+                continue;
+            }
+
+            if (argument == "--restart-service")
+            {
+                if (restartService) return CliParseResult.Failure("--restart-service may be specified only once");
+                restartService = true;
+                continue;
+            }
+
+            if (TryReadNamedOption(arguments, ref index, "--name", out var value, out var error))
+            {
+                if (name is not null) return CliParseResult.Failure("--name may be specified only once");
+                name = value;
+                continue;
+            }
+            if (error is not null) return CliParseResult.Failure(error);
+
+            if (install)
+            {
+                if (TryReadNamedOption(arguments, ref index, "--install-dir", out value, out error))
+                {
+                    if (directory is not null) return CliParseResult.Failure("--install-dir may be specified only once");
+                    directory = value;
+                    continue;
+                }
+                if (error is not null) return CliParseResult.Failure(error);
+            }
+
+            return CliParseResult.Failure($"unknown {(install ? "install" : "update")} argument '{argument}'");
+        }
+
+        if (check && restartService)
+            return CliParseResult.Failure("--check cannot be combined with --restart-service");
+
+        return install
+            ? CliParseResult.Success(new CliOptions(CliCommand.Install, isJson, configFile,
+                Install: new InstallCommandOptions(directory, restartService, name)))
+            : CliParseResult.Success(new CliOptions(CliCommand.Update, isJson, configFile,
+                Update: new UpdateCommandOptions(check, restartService, name)));
     }
 
     private static bool TryReadNamedOption(

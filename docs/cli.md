@@ -53,7 +53,9 @@ Effective settings use built-in defaults, then saved values, then command-line f
 
 A wildcard bind needs a usable advertised address. A bind address controls listening; an advertised hostname or public URL controls what the provider and browser use. Setting a hostname does not make a loopback listener remotely reachable.
 
-Stop the foreground process with Ctrl+C. A restart discards in-memory registrations. The relay never persists codes or tokens, and normal server logs omit callback query values.
+Stop the foreground process with Ctrl+C. The server persists registration IDs, destinations, and UTC lease expiry in a SQLite file beside the selected configuration. For `orelay.json`, the database is `orelay.registrations.db`. Use separate configuration paths for independent relays. Keep this directory writable by the service account and retain the database during upgrades. SQLite is compiled into the native executable.
+
+Registrations and renewals commit before the relay acknowledges them. Deletions and expiry cleanup are durable. Live registrations survive a restart with their original expiry; the clock continues while the server is stopped. Unknown, deleted, or expired registrations still fail. A corrupt or incompatible database prevents startup rather than starting with an empty registry. The relay never persists codes or tokens, and normal server logs omit callback query values.
 
 Server logs go to stderr. Each line has a local timestamp and a level, coloured in an interactive terminal. Registration and callback messages identify a worktree by the first eight characters of its registration ID and its destination origin, such as `http://localhost:5017`. Destination paths and callback query values are omitted. Health probes and successful lease renewals stay quiet.
 
@@ -85,9 +87,28 @@ orelay --config-file <absolute-config-path> service uninstall
 
 Install from a stable executable location with the selected config already initialized. Service management requires the platform's administrative privileges. Windows uses the service control manager; Linux uses a system-level systemd unit. macOS supports foreground execution, with no service installer in this version.
 
-The installed definition records absolute executable and config paths. Use the same paths for later management commands. Conflicting definitions are reported instead of overwritten. Uninstall preserves both the config and executable. Service restart loses registrations just like foreground restart.
+The installed definition records absolute executable and config paths. Use the same paths for later management commands. Conflicting definitions are reported instead of overwritten. Uninstall preserves the config, registration database, and executable. A service restart preserves unexpired registrations just like a foreground restart.
 
 Use `--name <name>` on service commands and doctor to select another service identity. Windows defaults to `ORelay`, running as LocalSystem with demand start. Linux defaults to `orelay.service`, running as root. Install creates the definition but does not start it or enable boot-time startup. Linux operators can separately run `sudo systemctl enable orelay.service` when they want boot-time startup. Grant the service account access to the chosen configuration directory.
+
+## Installation and updates
+
+```text
+orelay install --install-dir <path>
+orelay update --check --json
+orelay update
+orelay --config-file <absolute-config-path> update --restart-service --name <service-name>
+```
+
+`install` copies the running native executable to a stable directory. The default is `%LOCALAPPDATA%\ORelay` on Windows and `~/.local/bin` on Unix. It preserves existing configuration and registration data. Add the directory to your `PATH`; the command does not edit shell profiles or install a service. The repository's `install.ps1` and `install.sh` bootstraps download a verified release and invoke this command.
+
+`update --check` reads the latest stable GitHub release. `update` verifies the matching archive checksum and executable version before replacing the installed binary. Development builds are never implicitly downgraded to an older stable release. Managed `dotnet run` builds do not support installation or updates.
+
+`--restart-service` explicitly permits restarting the selected service. Supply its original `--config-file` and custom `--name` when applicable. An initially stopped service stays stopped. A running service must pass startup checks after replacement; failures attempt to restore the previous executable and service state. Configuration and database files are not rolled back. Database schema changes in future releases must therefore preserve executable rollback compatibility.
+
+Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below. Updates are explicit; automatic background installation is not implemented.
+
+An upgrade from the original in-memory releases cannot recover their live registrations. After that first upgrade, applications must explicitly restart to register in the persistent store.
 
 ## Exit codes
 

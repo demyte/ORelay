@@ -26,7 +26,7 @@ Send `PUT /registrations/{id}/lease` without a body to renew a live registration
 
 An entry is expired when the relay's current time is equal to or later than `expiresAt`. Registry operations are atomic; a callback already accepted for routing can finish its redirect while another operation deletes the entry. A crashed worktree's lease can remain live until expiry. The Aspire package renews every third of a lease, capped at 60 seconds, and bounds retries by the remaining lease.
 
-Send `DELETE /registrations/{id}` to deregister. HTTP `204` is returned even when the ID is already absent. All registrations disappear when the relay process stops. Applications obtain a new registration after an explicit restart and begin pending authorization flows again.
+Send `DELETE /registrations/{id}` to deregister. HTTP `204` is returned even when the ID is already absent. The relay commits registrations, renewals, and deletions to its SQLite database before acknowledging them. Unexpired registrations survive a process restart with the same IDs and deadlines. Startup and periodic cleanup remove expired rows, and each request checks expiry independently of cleanup. Restarting the relay never extends a lease. Applications whose registration expires or disappears obtain a new registration after an explicit restart and begin pending authorization flows again.
 
 ## Callback state
 

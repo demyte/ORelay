@@ -1,5 +1,7 @@
 # ORelay v1 handoff
 
+This is the historical handoff for the original in-memory implementation. The current checkout adds SQLite persistence, bootstrap installation, and explicit updates. Use the README and current CLI documentation for those behaviors.
+
 The v1 CLI, relay, configuration, discovery, doctor, Aspire hosting package, and Windows/systemd service implementations are complete in `main`. All six native platform jobs and the Windows/Linux service checks passed at source commit `5ffda0393eb41ab001ffffcbaacb9c56efdc26f9` on 2026-09-22.
 
 ## Artifacts

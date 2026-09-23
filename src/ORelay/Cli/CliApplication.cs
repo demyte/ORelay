@@ -79,6 +79,8 @@ public static class CliApplication
         builder.AppendLine();
         builder.AppendLine("Commands:");
         builder.AppendLine("  init             Create the selected configuration file.");
+        builder.AppendLine("  install          Install this executable to a stable directory.");
+        builder.AppendLine("  update           Check for or install the latest stable release.");
         builder.AppendLine("  config           Read or update saved configuration values.");
         builder.AppendLine("  server           Run the relay in the foreground.");
         builder.AppendLine("  doctor           Check configuration, health, port, and discovery state.");
@@ -98,6 +100,24 @@ public static class CliApplication
         var builder = new StringBuilder();
         switch (request.Command)
         {
+            case CliCommand.Update:
+                builder.AppendLine("Usage:");
+                builder.AppendLine("  orelay update [--check] [--restart-service] [--name <service>]");
+                builder.AppendLine("    [--config-file <path>] [--json]");
+                builder.AppendLine();
+                builder.AppendLine("Check for or install the latest stable GitHub release for this platform.");
+                builder.AppendLine("--check does not install anything. Configuration and registrations are preserved.");
+                builder.AppendLine("--restart-service permits stopping and restarting the matching running service.");
+                break;
+            case CliCommand.Install:
+                builder.AppendLine("Usage:");
+                builder.AppendLine("  orelay install [--install-dir <path>] [--restart-service] [--name <service>]");
+                builder.AppendLine("    [--config-file <path>] [--json]");
+                builder.AppendLine();
+                builder.AppendLine("Install this native executable, preserving existing configuration and data.");
+                builder.AppendLine("Defaults to %LOCALAPPDATA%\\ORelay on Windows and ~/.local/bin on Unix.");
+                builder.AppendLine("Service installation is a separate 'service install' command.");
+                break;
             case CliCommand.Init:
                 AppendSettingsHelp(builder, "orelay init", "Create orelay.json if it does not exist. Existing valid content is preserved.");
                 builder.AppendLine("Example:");
@@ -201,6 +221,8 @@ public static class CliApplication
         CliCommand.Server => "server",
         CliCommand.Doctor => "doctor",
         CliCommand.Service => "service",
+        CliCommand.Update => "update",
+        CliCommand.Install => "install",
         _ => command.ToString().ToLowerInvariant()
     };
 }

@@ -53,6 +53,7 @@ It proves the following user paths through the public executable:
 3. Two registrations are posted concurrently. Each receives a distinct ID. Two callback flows reach separate run-owned listeners, and the complete raw query survives the redirect, including encoded values, repeated fields, and an empty value.
 4. The short lease expires one registration. The other stays alive after a renewal, then deletion is proved idempotent and stops routing.
 5. Read-only doctor reports a healthy owned instance without changing its configuration and reports a missing selected file without creating it.
+6. The SQLite registration file preserves live registrations, renewals, and deletions across killed relay processes. A lease that expires during downtime stays expired, and a second configuration uses an independent database.
 
 For focused checks, use the repository scripts and the public test projects:
 
@@ -67,6 +68,8 @@ The helper does not claim service-manager, Tailscale, or Aspire coverage. Use th
 For server logging changes, also run `.github/workflows/logging-smoke.ps1` against the published executable. The [relay feature map](features/relay-leases.md#console-logging) covers captured text/JSON output, redaction, and terminal colour checks.
 
 For versioning and release changes, follow [versions and releases](features/versions-releases.md). Use its isolated Git fixture and package-consumer check before an authorized release tag is pushed.
+
+For bootstrap, installation, and self-update changes, follow [installation and updates](features/installation-updates.md). Never use the user's installed binary, service, or configuration as the update target.
 
 ## Evidence
 

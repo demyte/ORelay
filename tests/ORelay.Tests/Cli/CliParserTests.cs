@@ -103,9 +103,43 @@ public sealed class CliParserTests
         Assert.Null(result.Options.Help.Topic);
     }
 
+    [Fact]
+    public void InstallationPreservesPathsAndExplicitServiceOptions()
+    {
+        var install = CliParser.Parse(["install", "--install-dir", "path with spaces", "--config-file", "service config.json",
+            "--restart-service", "--name", "owned-relay", "--json"]);
+        Assert.True(install.IsSuccess);
+        Assert.Equal("path with spaces", install.Options!.Install!.InstallDirectory);
+        Assert.Equal("service config.json", install.Options.ConfigFile);
+        Assert.Equal("owned-relay", install.Options.Install.Name);
+        Assert.True(install.Options.Install.RestartService);
+        Assert.True(install.Options.IsJson);
+
+        var check = CliParser.Parse(["update", "--check", "--json"]);
+        Assert.True(check.IsSuccess);
+        Assert.True(check.Options!.Update!.Check);
+        Assert.False(check.Options.Update.RestartService);
+    }
+
+    [Theory]
+    [InlineData("update --check --restart-service")]
+    [InlineData("update --check --check")]
+    [InlineData("update --install-dir some-path")]
+    [InlineData("install --check")]
+    [InlineData("install --install-dir")]
+    [InlineData("install --install-dir a --install-dir b")]
+    [InlineData("update --port 12345")]
+    [InlineData("install --restart-service --restart-service")]
+    public void InvalidUpdateOptionsFailBeforeAnyCommandRuns(string commandLine)
+    {
+        Assert.False(CliParser.Parse(commandLine.Split(' ')).IsSuccess);
+    }
+
     [Theory]
     [InlineData(CliCommand.Config, "config")]
     [InlineData(CliCommand.Service, "service")]
+    [InlineData(CliCommand.Update, "update")]
+    [InlineData(CliCommand.Install, "install")]
     public void RootSubcommandHelpWorksWithoutARequiredAction(CliCommand command, string commandName)
     {
         var result = CliParser.Parse([commandName, "--help"]);

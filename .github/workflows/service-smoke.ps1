@@ -688,7 +688,7 @@ function Invoke-CallbackProof {
             CallbackUri = $callbackUri
         }
         Write-ServiceEvidence -Name "$EvidenceName.json" -Value $evidence
-        return [pscustomobject]@{ State = $state; CallbackUri = $callbackUri }
+        return [pscustomobject]@{ State = $state; CallbackUri = $callbackUri; RedirectLocation = $location }
     }
     finally {
         if ($null -ne $destinationStream) {
@@ -762,10 +762,10 @@ if ($script:IsLinuxPlatform) {
 }
 
 $serviceFileName = if ($Rid.StartsWith('win-', [System.StringComparison]::OrdinalIgnoreCase)) {
-    'orelay service executable.exe'
+    'orelay.exe'
 }
 else {
-    'orelay service executable'
+    'orelay'
 }
 $script:ServiceExecutable = Join-Path $script:WorkPath $serviceFileName
 $script:ConfigPath = Join-Path $script:WorkPath 'service config path.json'
@@ -931,20 +931,66 @@ try {
     Wait-RelayHealth -Client $httpClient -Port $port
     $oldCallback = Invoke-HttpRequest -Client $httpClient -Method 'GET' -Uri $callback.CallbackUri
     try {
-        if ([int]$oldCallback.StatusCode -ne 404) {
-            throw "Restart retained the old registration; callback returned status $([int]$oldCallback.StatusCode)."
+        $restartLocation = $oldCallback.Headers.Location?.OriginalString
+        if ([int]$oldCallback.StatusCode -ne 302 -or $restartLocation -cne $callback.RedirectLocation) {
+            throw "Restart did not preserve the registration and exact callback location. Status: $([int]$oldCallback.StatusCode)."
         }
-        Write-ServiceEvidence -Name 'service-restart-registration-loss.json' -Value ([ordered]@{
+        Write-ServiceEvidence -Name 'service-restart-registration-persistence.json' -Value ([ordered]@{
                 StatusCode = [int]$oldCallback.StatusCode
                 CallbackUri = $callback.CallbackUri
-                RegistrationLost = $true
+                ExpectedLocation = $callback.RedirectLocation
+                ActualLocation = $restartLocation
+                RegistrationPersisted = $true
             })
     }
     finally {
         $oldCallback.Dispose()
     }
 
+    $installSourceHash = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash
+    $installResult = Invoke-PrivilegedProcess -FilePath $ExecutablePath -Arguments @(
+        '--config-file', $script:ConfigPath,
+        'install', '--install-dir', $script:WorkPath,
+        '--name', $serviceName, '--restart-service', '--json'
+    ) -EvidenceName 'service-install-replace-running'
+    if ($installResult.ExitCode -ne 0) {
+        throw "Install into the running service directory failed with exit code $($installResult.ExitCode)."
+    }
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    $installedHash = (Get-FileHash -LiteralPath $script:ServiceExecutable -Algorithm SHA256).Hash
+    if ($installedHash -cne $installSourceHash) {
+        throw 'Install did not leave the verified source executable in the service directory.'
+    }
+    $installedCallback = Invoke-HttpRequest -Client $httpClient -Method 'GET' -Uri $callback.CallbackUri
+    try {
+        if ([int]$installedCallback.StatusCode -ne 302 -or
+            $installedCallback.Headers.Location?.OriginalString -cne $callback.RedirectLocation) {
+            throw 'Install changed the live callback destination or query.'
+        }
+    }
+    finally {
+        $installedCallback.Dispose()
+    }
+    Write-ServiceEvidence -Name 'service-install-replacement.json' -Value ([ordered]@{
+            SourceSha256 = $installSourceHash
+            InstalledSha256 = $installedHash
+            RunningAfterInstall = $true
+            CallbackLocation = $callback.RedirectLocation
+            ConfigurationExists = Test-Path -LiteralPath $script:ConfigPath -PathType Leaf
+            DatabaseExists = Test-Path -LiteralPath ([System.IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')) -PathType Leaf
+        })
+
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
+    $stoppedInstall = Invoke-PrivilegedProcess -FilePath $ExecutablePath -Arguments @(
+        '--config-file', $script:ConfigPath,
+        'install', '--install-dir', $script:WorkPath,
+        '--name', $serviceName, '--restart-service', '--json'
+    ) -EvidenceName 'service-install-preserve-stopped'
+    if ($stoppedInstall.ExitCode -ne 0) {
+        throw "Install into the stopped service directory failed with exit code $($stoppedInstall.ExitCode)."
+    }
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action uninstall -Name $serviceName) -ExpectedState 'NotInstalled'

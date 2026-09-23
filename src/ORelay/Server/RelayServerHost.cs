@@ -17,23 +17,20 @@ namespace ORelay.Server;
 /// </summary>
 public static class RelayServerHost
 {
-    public static Task<int> RunAsync(
-        RelaySettings settings,
-        int? portOverride = null,
-        string? bindOverride = null,
-        bool jsonOutput = false,
-        CancellationToken cancellationToken = default) =>
-        RunAsync(settings, portOverride, bindOverride, jsonOutput, serviceName: null, cancellationToken: cancellationToken);
-
     public static async Task<int> RunAsync(
         RelaySettings settings,
         int? portOverride,
         string? bindOverride,
         bool jsonOutput,
         string? serviceName,
+        string registrationDatabasePath,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
+        if (string.IsNullOrWhiteSpace(registrationDatabasePath))
+        {
+            throw new ArgumentException("A registration database path is required when starting the relay.", nameof(registrationDatabasePath));
+        }
 
         var effectiveSettings = settings with
         {
@@ -41,7 +38,7 @@ public static class RelayServerHost
             Bind = bindOverride ?? settings.Bind,
         };
         RelaySettingsValidator.Validate(effectiveSettings);
-        var options = RelayServerOptions.FromSettings(effectiveSettings);
+        var options = RelayServerOptions.FromSettings(effectiveSettings, registrationDatabasePath);
         options.Validate();
 
         // Services can start in the filesystem root. Keep configuration watchers

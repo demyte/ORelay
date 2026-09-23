@@ -35,6 +35,9 @@ public sealed class RelayServerOptions
 
     public int MaxRegistrations { get; init; } = DefaultMaxRegistrations;
 
+    /// <summary>File owned by this relay instance for durable registrations.</summary>
+    public string? RegistrationDatabasePath { get; init; }
+
     public string CallbackPath { get; init; } = DefaultCallbackPath;
 
     /// <summary>
@@ -57,7 +60,7 @@ public sealed class RelayServerOptions
                 : CombinePaths(PublicUrl.AbsolutePath, CallbackPath)
             : CallbackPath;
 
-    public static RelayServerOptions FromSettings(RelaySettings settings)
+    public static RelayServerOptions FromSettings(RelaySettings settings, string? registrationDatabasePath = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
@@ -80,6 +83,7 @@ public sealed class RelayServerOptions
             LeaseSeconds = settings.LeaseSeconds,
             MaxRegistrations = settings.MaxRegistrations,
             SharedBindingExplicit = !IsLoopbackBind(settings.Bind),
+            RegistrationDatabasePath = registrationDatabasePath,
         };
     }
 
@@ -141,6 +145,12 @@ public sealed class RelayServerOptions
         if (MaxRegistrations is < 1 or > 1_000_000)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxRegistrations), "MaxRegistrations must be between 1 and 1000000.");
+        }
+
+        if (RegistrationDatabasePath is not null &&
+            (string.IsNullOrWhiteSpace(RegistrationDatabasePath) || RegistrationDatabasePath == ":memory:"))
+        {
+            throw new ArgumentException("RegistrationDatabasePath must be a file path.", nameof(RegistrationDatabasePath));
         }
 
         if (CallbackPath.Length == 0 || CallbackPath[0] != '/' ||
