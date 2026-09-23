@@ -124,7 +124,7 @@ try {
             if ($homeProbe.ExitCode -ne 0 -or $homeProbe.Stdout.Trim() -cne $profileHome) {
                 throw "The $shell child process would use a home outside the run-owned directory."
             }
-            $profilePaths = switch ($shell) {
+            [string[]]$profilePaths = switch ($shell) {
                 'bash' { @((Join-Path $profileHome '.bashrc'), (Join-Path $profileHome '.profile')) }
                 'sh' { @((Join-Path $profileHome '.profile')) }
                 'zsh' { @((Join-Path $zdot '.zshrc')) }
