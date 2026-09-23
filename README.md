@@ -14,34 +14,32 @@ ORelay ships as one native executable for Windows, Linux, and macOS, on x64 and 
 
 ## Install
 
-The bootstrap scripts detect your platform, verify the release checksum, and install the executable. Running the bootstrap again also upgrades installations that predate `orelay update`. They preserve existing configuration and registration data.
+Run the command for your platform. The installer downloads the matching executable and verifies its checksum. No .NET installation, GitHub account, or GitHub CLI is required.
 
 > The bootstrap, self-updater, and persistent registrations are new in this checkout. Published versions through `v0.1.2` do not include them. The commands below need the first release containing these changes.
 
-The repository and release downloads are public. No GitHub account, token, or GitHub CLI is required to install the executable.
-
-### Windows
-
-Run in Windows PowerShell or PowerShell 7:
+### Windows · PowerShell
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing -Uri https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1 -OutFile install.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+powershell -NoProfile -Command "irm https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1 | iex"
 ```
 
-The default directory is `%LOCALAPPDATA%\ORelay`. Add it to your user `PATH`, or run `& "$env:LOCALAPPDATA\ORelay\orelay.exe"` directly. Use `-InstallDir <path>` to select another directory.
-
-### Linux and macOS
+### macOS and Linux · Shell
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh -o install.sh && sh install.sh
+curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh | sh
 ```
 
-The default directory is `~/.local/bin`. Add it to your `PATH` if needed. Use `--install-dir <path>` to select another directory. The Unix bootstrap requires `curl`, `tar`, and a SHA-256 tool available on the supported systems.
+Installs to `%LOCALAPPDATA%\ORelay` on Windows or `~/.local/bin` on macOS and Linux. Add that directory to your `PATH` if needed. Rerun the command to upgrade; existing configuration and registration data are preserved.
 
-You can install without cloning or building ORelay. An existing GitHub CLI login can also download the release. The self-updater accepts `GH_TOKEN` or `GITHUB_TOKEN` when authenticated access is useful.
+<details>
+<summary>Installation options and manual downloads</summary>
+
+To choose another directory, download the [PowerShell installer](install.ps1) and run it with `-InstallDir <path>`, or the [shell installer](install.sh) with `--install-dir <path>`. The Unix installer requires `curl`, `tar`, and a SHA-256 tool available on the supported systems.
 
 For manual installation, download the archive for your OS and architecture from [Releases](https://github.com/demyte/ORelay/releases), verify its `.sha256` file, and extract it. Run the extracted executable with `install --install-dir <path>` to put it in a stable location. The [platform guide](docs/native-platforms.md) lists tested OS versions.
+
+</details>
 
 ## Quick start
 
