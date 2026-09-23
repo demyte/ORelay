@@ -96,7 +96,7 @@ orelay server --port 13000
 orelay --config-file ./orelay.shared.json server --bind 0.0.0.0 --hostname relay.example.test
 ```
 
-Effective settings use built-in defaults, then saved values, then command-line flags. On the first start, a missing file is created with the supplied flags. When the file exists, server flags apply only to that process and are not saved. Use `config set` for permanent changes. Config changes take effect on the next start.
+Effective settings use built-in defaults, then saved values, then command-line flags. On the first start, a missing file is created with the supplied flags. When the file exists, server flags apply only to that process and are not saved. Use `config set` for permanent changes. Valid saved changes apply while the process runs, with command-line flags still taking precedence. Rejected changes keep the previous settings; see [live configuration](#live-configuration).
 
 A wildcard bind needs a usable advertised address. A bind address controls listening; an advertised hostname or public URL controls what the provider and browser use. Setting a hostname does not make a loopback listener remotely reachable.
 
@@ -163,7 +163,7 @@ Both bootstrap scripts require release `0.2.0` or later. The PowerShell script r
 
 Rollback handles failures detected by the updater. A forced termination or power loss between the file moves can interrupt recovery. If the executable is missing afterward, check its directory for `<executable>.backup-*` and restore the previous executable to its original name before restarting the service.
 
-For automatic service updates, set `autoUpdate` to `true`, optionally set `autoUpdateIntervalSeconds`, then restart the named service with its original configuration path. Checks use the same stable-release feed, checksum validation, version checks, and rollback as `update`. Disabled configurations and foreground servers do not start automatic workers. A missing or invalid configuration prevents an automatic update.
+For automatic service updates, set `autoUpdate` to `true` and optionally set `autoUpdateIntervalSeconds` in the service's selected configuration file. The running service applies valid changes to its update schedule automatically; see [live configuration](#live-configuration) for rejected changes and interval timing. Checks use the same stable-release feed, checksum validation, version checks, and rollback as `update`. Disabled configurations and foreground servers do not start automatic workers. A missing or invalid configuration prevents an automatic update.
 
 The worker runs independently so it can finish replacing and restarting the relay after the relay stops. It uses the service account's permissions on Windows. Linux uses a separate transient systemd service and requires systemd 254 or later with permission to launch it. Neither platform prompts for elevation. Permission, network, or validation failures leave callback serving active and are retried after the interval.
 
