@@ -102,3 +102,4 @@ exit /b %ERRORLEVEL%
     Remove-Item -LiteralPath $testRoot -Recurse -Force
     Remove-Item Env:GH_TOKEN, Env:FIXTURE_ROOT, Env:FIXTURE_ARCHIVE, Env:FIXTURE_MISSING, Env:FIXTURE_BAD_CHECKSUM, Env:FIXTURE_EXIT, Env:ARG_LOG -ErrorAction SilentlyContinue
 }
+exit 0
