@@ -36,12 +36,12 @@ foreach ($relative in @(git -C $repo ls-files --cached --others --exclude-standa
 }
 $worker = Join-Path $fixture 'src/ORelay/Updating/ServiceAutoUpdateWorker.cs'
 $originalWorker = Get-Content -LiteralPath $worker -Raw
-$engineLine = 'var engine = new UpdateEngine(runtime: _runtime, services: _services);'
+$engineLine = 'var engine = new UpdateEngine(runtime: _runtime, services: _services,'
 if ([regex]::Matches($originalWorker, [regex]::Escape($engineLine)).Count -ne 1) {
     throw 'The worker source no longer has the expected single fixture injection point.'
 }
 $fixtureWorker = $originalWorker.Replace($engineLine,
-    'var engine = new UpdateEngine(http: new HttpClient(new ServiceAutoUpdateFixtureHandler()), runtime: _runtime, services: _services, token: "disposable-ci-fixture");')
+    'var engine = new UpdateEngine(http: new HttpClient(new ServiceAutoUpdateFixtureHandler()), runtime: _runtime, services: _services, token: "disposable-ci-fixture",')
 Set-Content -LiteralPath $worker -Value $fixtureWorker
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ServiceAutoUpdateFixtureHandler.cs') `
     -Destination (Join-Path $fixture 'src/ORelay/Updating/ServiceAutoUpdateFixtureHandler.cs')
