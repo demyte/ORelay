@@ -75,6 +75,34 @@ public sealed class PersistentRegistrationTests
         Assert.DoesNotContain("synthetic-secret", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public void RemoteRegistration_RespectsStoreAndRequestPolicies(bool storeAllowsRemote, bool requestAllowsRemote, bool succeeds)
+    {
+        using var fixture = new DatabaseFixture();
+        var clock = new ControlledTimeProvider(DateTimeOffset.UtcNow);
+        using var store = fixture.Open(clock, allowNonLoopback: storeAllowsRemote);
+
+        var created = store.Register("https://worktree.example.test/callback", requestAllowsRemote);
+
+        Assert.Equal(succeeds, created.IsSuccess);
+        if (!succeeds)
+        {
+            Assert.Equal("callback_must_be_loopback", created.ErrorCode);
+            Assert.Equal(0, store.Count);
+            return;
+        }
+
+        Assert.True(store.TryGet(created.Response!.Id, out var registration));
+        Assert.Equal(created.Response.CallbackUrl, registration.CallbackUrl);
+        Assert.True(store.Renew(registration.Id, "http://127.0.0.1:12987/callback").IsSuccess);
+        using var reopened = fixture.Open(clock, allowNonLoopback: storeAllowsRemote);
+        Assert.True(reopened.TryGet(registration.Id, out _));
+        Assert.True(reopened.Renew(registration.Id, "http://127.0.0.1:12987/callback").IsSuccess);
+    }
+
     [Fact]
     public void NewerSchemaVersion_FailsClosed()
     {

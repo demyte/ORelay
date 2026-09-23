@@ -129,7 +129,8 @@ printf '%s\n' 'not-a-valid-checksum  orelay-1.2.3-linux-x64.tar.gz' > "$test_roo
 if run_install env FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 >/dev/null 2>&1; then
   printf 'Checksum failure unexpectedly ran the installer.\n' >&2; exit 1
 fi
-[ -z "$(find "$test_root/tmp" -mindepth 1 -maxdepth 1 -name 'orelay-bootstrap.*' -print -quit)" ] || {
+set -- "$test_root/tmp"/orelay-bootstrap.*
+[ "$1" = "$test_root/tmp/orelay-bootstrap.*" ] || {
   printf 'Bootstrap left a temporary download directory behind.\n' >&2; exit 1;
 }
 printf '%s\n' 'bootstrap fixture checks passed'

@@ -91,7 +91,9 @@ public sealed class RegistrationStore : IDisposable
         bool allowNonLoopback,
         string relayCallbackUrl = "")
     {
-        if (!CallbackDestination.TryValidate(callbackUrl, allowNonLoopback, out _, out var errorCode))
+        // Per-call policy may narrow the durable store policy, but never widen it.
+        var effectiveAllowNonLoopback = allowNonLoopback && (_database is null || _allowNonLoopbackDestinations);
+        if (!CallbackDestination.TryValidate(callbackUrl, effectiveAllowNonLoopback, out _, out var errorCode))
         {
             return RegistrationOperationResult.Invalid(errorCode);
         }

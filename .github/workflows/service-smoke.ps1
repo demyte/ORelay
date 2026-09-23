@@ -7,6 +7,15 @@ param(
     [string]$RunRoot,
 
     [Parameter(Mandatory = $true)]
+    [string]$PreviousExecutablePath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$NextExecutablePath,
+
+    [Parameter(Mandatory = $true)]
+    [string]$FailingExecutablePath,
+
+    [Parameter(Mandatory = $true)]
     [string]$Rid,
 
     [switch]$RequireServiceProof
@@ -767,6 +776,94 @@ $serviceFileName = if ($Rid.StartsWith('win-', [System.StringComparison]::Ordina
 else {
     'orelay'
 }
+
+function Get-ExecutableIdentity {
+    param([Parameter(Mandatory = $true)] [string]$Path)
+    $result = @(& $Path --version --json)
+    if ($LASTEXITCODE -ne 0) { throw "Could not read the executable version at '$Path'." }
+    $version = (($result -join '') | ConvertFrom-Json).version.Split('+')[0]
+    return [pscustomobject]@{
+        Version = $version
+        Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+    }
+}
+
+function Assert-PersistedCallback {
+    param(
+        [Parameter(Mandatory = $true)] [System.Net.Http.HttpClient]$Client,
+        [Parameter(Mandatory = $true)] [object]$Callback,
+        [Parameter(Mandatory = $true)] [string]$EvidenceName
+    )
+    $response = Invoke-HttpRequest -Client $Client -Method 'GET' -Uri $Callback.CallbackUri
+    try {
+        $location = $response.Headers.Location?.OriginalString
+        if ([int]$response.StatusCode -ne 302 -or $location -cne $Callback.RedirectLocation) {
+            throw "The callback changed after '$EvidenceName'. Status: $([int]$response.StatusCode)."
+        }
+        Write-ServiceEvidence -Name "$EvidenceName.json" -Value ([ordered]@{
+                StatusCode = [int]$response.StatusCode
+                CallbackUri = $Callback.CallbackUri
+                ExpectedLocation = $Callback.RedirectLocation
+                ActualLocation = $location
+                RegistrationPersisted = $true
+            })
+    }
+    finally { $response.Dispose() }
+}
+
+function Assert-InstallTransition {
+    param(
+        [Parameter(Mandatory = $true)] [string]$SourcePath,
+        [Parameter(Mandatory = $true)] [string]$EvidenceName,
+        [Parameter(Mandatory = $true)] [string]$ExpectedState,
+        [Parameter(Mandatory = $true)] [System.Net.Http.HttpClient]$Client,
+        [Parameter(Mandatory = $true)] [object]$Callback,
+        [Parameter(Mandatory = $true)] [int]$Port
+    )
+    $before = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    $source = Get-ExecutableIdentity -Path $SourcePath
+    $beforeStatus = Invoke-ServiceAction -Action status -Name $script:OwnedServiceName
+    Assert-ServiceResult -ActionResult $beforeStatus -ExpectedState $ExpectedState
+    if ($before.Version -ceq $source.Version -or $before.Sha256 -ceq $source.Sha256) {
+        throw "'$EvidenceName' requires different source and installed versions and bytes."
+    }
+    $configHash = (Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash
+    $result = Invoke-PrivilegedProcess -FilePath $SourcePath -Arguments @(
+        '--config-file', $script:ConfigPath,
+        'install', '--install-dir', $script:WorkPath,
+        '--name', $script:OwnedServiceName, '--restart-service', '--json'
+    ) -EvidenceName $EvidenceName
+    $payload = $result.StandardOutput | ConvertFrom-Json
+    if ($result.ExitCode -ne 0 -or -not $payload.succeeded -or -not $payload.changed) {
+        throw "'$EvidenceName' did not replace the installed executable. Exit code: $($result.ExitCode)."
+    }
+    $status = Invoke-ServiceAction -Action status -Name $script:OwnedServiceName
+    Assert-ServiceResult -ActionResult $status -ExpectedState $ExpectedState
+    $after = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    if ($after.Version -cne $source.Version -or $after.Sha256 -cne $source.Sha256) {
+        throw "'$EvidenceName' left a different installed executable."
+    }
+    if ((Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash -cne $configHash) {
+        throw "'$EvidenceName' changed the service configuration."
+    }
+    $databasePath = [IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')
+    if (-not (Test-Path -LiteralPath $databasePath -PathType Leaf)) {
+        throw "'$EvidenceName' lost the registration database."
+    }
+    if ($ExpectedState -eq 'Running') {
+        Wait-RelayHealth -Client $Client -Port $Port
+        Assert-PersistedCallback -Client $Client -Callback $Callback -EvidenceName "$EvidenceName-callback"
+    }
+    Write-ServiceEvidence -Name "$EvidenceName-transition.json" -Value ([ordered]@{
+            PreviousVersion = $before.Version; PreviousSha256 = $before.Sha256
+            PreviousServiceState = $beforeStatus.Result.state
+            SourceVersion = $source.Version; SourceSha256 = $source.Sha256
+            InstalledVersion = $after.Version; InstalledSha256 = $after.Sha256
+            Changed = $payload.changed; ServiceState = $status.Result.state
+            ConfigurationSha256 = $configHash
+            DatabaseExists = $true
+        })
+}
 $script:ServiceExecutable = Join-Path $script:WorkPath $serviceFileName
 $script:ConfigPath = Join-Path $script:WorkPath 'service config path.json'
 if ($script:IsLinuxPlatform -and -not $script:IsRootUser -and $null -ne $script:SudoPath) {
@@ -778,6 +875,7 @@ else {
     $script:ServiceLauncherPrefix = @()
 }
 $serviceName = "orelay-ci-$([Guid]::NewGuid().ToString('N'))"
+$script:OwnedServiceName = $serviceName
 $conflictName = "orelay-ci-conflict-$([Guid]::NewGuid().ToString('N'))"
 $script:UnprivilegedServiceName = "orelay-ci-unprivileged-$([Guid]::NewGuid().ToString('N'))"
 $script:UnitPath = if ($script:IsLinuxPlatform) {
@@ -801,7 +899,24 @@ $script:PrimaryError = $null
 $conflictDefinitionCreated = $false
 $httpClient = $null
 
-Copy-Item -LiteralPath $ExecutablePath -Destination $script:ServiceExecutable -Force
+$identities = [ordered]@{
+    Previous = Get-ExecutableIdentity -Path $PreviousExecutablePath
+    Production = Get-ExecutableIdentity -Path $ExecutablePath
+    Next = Get-ExecutableIdentity -Path $NextExecutablePath
+    Failing = Get-ExecutableIdentity -Path $FailingExecutablePath
+}
+$previousNumber = [version]$identities.Previous.Version.Split('-')[0]
+$productionNumber = [version]$identities.Production.Version.Split('-')[0]
+$nextNumber = [version]$identities.Next.Version.Split('-')[0]
+$failingNumber = [version]$identities.Failing.Version.Split('-')[0]
+if ($previousNumber -ge $productionNumber -or $productionNumber -ge $nextNumber -or $nextNumber -ge $failingNumber) {
+    throw 'Service fixture versions must increase from previous through production, next, and failing.'
+}
+if (@($identities.Values | ForEach-Object Sha256 | Select-Object -Unique).Count -ne 4) {
+    throw 'Service fixture executable hashes must all differ.'
+}
+Write-ServiceEvidence -Name 'service-version-order.json' -Value $identities
+Copy-Item -LiteralPath $PreviousExecutablePath -Destination $script:ServiceExecutable -Force
 if ($script:IsLinuxPlatform) {
     & chmod 755 $script:ServiceExecutable
     if ($LASTEXITCODE -ne 0) {
@@ -828,6 +943,7 @@ try {
         '--config-file', $script:ConfigPath,
         '--port', [string]$port,
         '--bind', '127.0.0.1',
+        '--lease-seconds', '3600',
         'init'
     ) -EvidenceName 'service-init'
     if ($init.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) {
@@ -947,50 +1063,61 @@ try {
         $oldCallback.Dispose()
     }
 
-    $installSourceHash = (Get-FileHash -LiteralPath $ExecutablePath -Algorithm SHA256).Hash
-    $installResult = Invoke-PrivilegedProcess -FilePath $ExecutablePath -Arguments @(
-        '--config-file', $script:ConfigPath,
-        'install', '--install-dir', $script:WorkPath,
-        '--name', $serviceName, '--restart-service', '--json'
-    ) -EvidenceName 'service-install-replace-running'
-    if ($installResult.ExitCode -ne 0) {
-        throw "Install into the running service directory failed with exit code $($installResult.ExitCode)."
-    }
-    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Running'
-    Wait-RelayHealth -Client $httpClient -Port $port
-    $installedHash = (Get-FileHash -LiteralPath $script:ServiceExecutable -Algorithm SHA256).Hash
-    if ($installedHash -cne $installSourceHash) {
-        throw 'Install did not leave the verified source executable in the service directory.'
-    }
-    $installedCallback = Invoke-HttpRequest -Client $httpClient -Method 'GET' -Uri $callback.CallbackUri
-    try {
-        if ([int]$installedCallback.StatusCode -ne 302 -or
-            $installedCallback.Headers.Location?.OriginalString -cne $callback.RedirectLocation) {
-            throw 'Install changed the live callback destination or query.'
-        }
-    }
-    finally {
-        $installedCallback.Dispose()
-    }
-    Write-ServiceEvidence -Name 'service-install-replacement.json' -Value ([ordered]@{
-            SourceSha256 = $installSourceHash
-            InstalledSha256 = $installedHash
-            RunningAfterInstall = $true
-            CallbackLocation = $callback.RedirectLocation
-            ConfigurationExists = Test-Path -LiteralPath $script:ConfigPath -PathType Leaf
-            DatabaseExists = Test-Path -LiteralPath ([System.IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')) -PathType Leaf
-        })
+    Assert-InstallTransition -SourcePath $ExecutablePath -EvidenceName 'service-install-replace-running' `
+        -ExpectedState 'Running' -Client $httpClient -Callback $callback -Port $port
 
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
-    $stoppedInstall = Invoke-PrivilegedProcess -FilePath $ExecutablePath -Arguments @(
+    Assert-InstallTransition -SourcePath $NextExecutablePath -EvidenceName 'service-install-preserve-stopped' `
+        -ExpectedState 'Stopped' -Client $httpClient -Callback $callback -Port $port
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action start -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-stopped-transition-callback'
+
+    $beforeFailure = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    $beforeFailureStatus = Invoke-ServiceAction -Action status -Name $serviceName
+    Assert-ServiceResult -ActionResult $beforeFailureStatus -ExpectedState 'Running'
+    $configBeforeFailure = (Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash
+    $failingStartMarker = Join-Path $script:WorkPath 'failing-service-start.marker'
+    if (Test-Path -LiteralPath $failingStartMarker) { throw 'Failing candidate startup marker already exists.' }
+    $failedInstall = Invoke-PrivilegedProcess -FilePath $FailingExecutablePath -Arguments @(
         '--config-file', $script:ConfigPath,
         'install', '--install-dir', $script:WorkPath,
         '--name', $serviceName, '--restart-service', '--json'
-    ) -EvidenceName 'service-install-preserve-stopped'
-    if ($stoppedInstall.ExitCode -ne 0) {
-        throw "Install into the stopped service directory failed with exit code $($stoppedInstall.ExitCode)."
+    ) -EvidenceName 'service-install-failed-start-rollback'
+    $failure = $failedInstall.StandardOutput | ConvertFrom-Json
+    if ($failedInstall.ExitCode -ne 3 -or $failure.succeeded -or $failure.changed -or
+        $failure.errorCode -cne 'ServiceFailure') {
+        throw 'Failing service candidate did not report the expected service startup failure.'
     }
-    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
+    if (-not (Test-Path -LiteralPath $failingStartMarker -PathType Leaf) -or
+        (Get-Content -LiteralPath $failingStartMarker -Raw).Trim() -cne 'server startup reached') {
+        throw 'The failing candidate did not reach service server startup.'
+    }
+    $afterFailure = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    if ($afterFailure.Version -cne $beforeFailure.Version -or $afterFailure.Sha256 -cne $beforeFailure.Sha256) {
+        throw 'Failed service candidate did not restore the previous executable.'
+    }
+    if ((Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash -cne $configBeforeFailure) {
+        throw 'Failed service candidate changed the service configuration.'
+    }
+    if (-not (Test-Path -LiteralPath ([IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')) -PathType Leaf)) {
+        throw 'Failed service candidate lost the registration database.'
+    }
+    $rollbackStatus = Invoke-ServiceAction -Action status -Name $serviceName
+    Assert-ServiceResult -ActionResult $rollbackStatus -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-rollback-callback'
+    Write-ServiceEvidence -Name 'service-install-rollback.json' -Value ([ordered]@{
+            PreviousVersion = $beforeFailure.Version; PreviousSha256 = $beforeFailure.Sha256
+            PreviousServiceState = $beforeFailureStatus.Result.state
+            CandidateVersion = $identities.Failing.Version; CandidateSha256 = $identities.Failing.Sha256
+            RestoredVersion = $afterFailure.Version; RestoredSha256 = $afterFailure.Sha256
+            CandidateExitCode = $failedInstall.ExitCode; CandidateErrorCode = $failure.errorCode
+            CandidateServerStarted = $true
+            ServiceState = $rollbackStatus.Result.state; ConfigurationSha256 = $configBeforeFailure
+            DatabaseExists = Test-Path -LiteralPath ([IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')) -PathType Leaf
+        })
+
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action uninstall -Name $serviceName) -ExpectedState 'NotInstalled'

@@ -106,6 +106,8 @@ orelay --config-file <absolute-config-path> update --restart-service --name <ser
 
 `--restart-service` explicitly permits restarting the selected service. Supply its original `--config-file` and custom `--name` when applicable. An initially stopped service stays stopped. A running service must pass startup checks after replacement; failures attempt to restore the previous executable and service state. Configuration and database files are not rolled back. Database schema changes in future releases must therefore preserve executable rollback compatibility.
 
+Rollback handles failures detected by the updater. A forced termination or power loss between the file moves can interrupt recovery. If the executable is missing afterward, check its directory for `<executable>.backup-*` and restore the previous executable to its original name before restarting the service.
+
 Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below. Updates are explicit; automatic background installation is not implemented.
 
 An upgrade from the original in-memory releases cannot recover their live registrations. After that first upgrade, applications must explicitly restart to register in the persistent store.

@@ -41,10 +41,11 @@ internal readonly record struct SemVersion(int Major, int Minor, int Patch, stri
         var right = other.Prerelease.Split('.');
         for (var index = 0; index < Math.Min(left.Length, right.Length); index++)
         {
-            var lnum = long.TryParse(left[index], out var l);
-            var rnum = long.TryParse(right[index], out var r);
-            var comparison = lnum && rnum ? l.CompareTo(r) : lnum ? -1 : rnum ? 1 :
-                string.CompareOrdinal(left[index], right[index]);
+            var lnum = left[index].All(char.IsDigit);
+            var rnum = right[index].All(char.IsDigit);
+            var comparison = lnum && rnum ?
+                left[index].Length.CompareTo(right[index].Length) : lnum ? -1 : rnum ? 1 : 0;
+            if (comparison == 0) comparison = string.CompareOrdinal(left[index], right[index]);
             if (comparison != 0) return comparison;
         }
 
@@ -103,8 +104,13 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
         }
         catch (TimeoutException)
         {
-            process.Kill(entireProcessTree: true);
+            await StopProbeAsync(process);
             return null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await StopProbeAsync(process);
+            throw;
         }
 
         var output = await stdout;
@@ -120,11 +126,19 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
             return null;
         }
     }
+
+    private static async Task StopProbeAsync(Process process)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException) { return; } // The process exited before Kill.
+        await process.WaitForExitAsync(CancellationToken.None);
+    }
 }
 
 internal static class UpdateArchive
 {
     private const long MaxExecutableBytes = 90 * 1024 * 1024;
+    private const long MaxTarExpandedBytes = 3 * MaxExecutableBytes;
 
     public static byte[] ExtractExecutable(byte[] bytes, string rid)
     {
@@ -153,12 +167,18 @@ internal static class UpdateArchive
             {
                 using var gzip = new GZipStream(source, CompressionMode.Decompress);
                 using var tar = new TarReader(gzip);
+                long expandedBytes = 0;
                 TarEntry? entry;
                 while ((entry = tar.GetNextEntry()) is not null)
                 {
                     var name = ValidateName(entry.Name, expected);
                     if (entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile or TarEntryType.Directory))
                         throw new UpdateException(UpdateErrorCode.InvalidArchive, "Release archive has a link or unsafe entry.");
+                    if (entry.Length > MaxExecutableBytes)
+                        throw new UpdateException(UpdateErrorCode.InvalidArchive, "Release archive has an oversized entry.");
+                    if (entry.Length > MaxTarExpandedBytes - expandedBytes)
+                        throw new UpdateException(UpdateErrorCode.InvalidArchive, "Release archive exceeds the expanded size limit.");
+                    expandedBytes += entry.Length;
                     if (name == expected)
                     {
                         if (executable is not null || entry.DataStream is null)

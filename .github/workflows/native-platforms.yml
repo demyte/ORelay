@@ -266,8 +266,15 @@ jobs:
           EXECUTABLE_NAME: ${{ matrix.executable }}
         run: |
           $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/build-service-fixtures.ps1 `
+            -RunRoot $env:RUN_ROOT -Rid $env:RID -ExecutableName $env:EXECUTABLE_NAME `
+            -ProductionExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME)
+          if ($LASTEXITCODE -ne 0) { throw "Service fixture build failed with exit code $LASTEXITCODE." }
           pwsh -NoProfile -File .github/workflows/service-smoke.ps1 `
             -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -PreviousExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/previous') $env:EXECUTABLE_NAME) `
+            -NextExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/next') $env:EXECUTABLE_NAME) `
+            -FailingExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/failing') $env:EXECUTABLE_NAME) `
             -RunRoot $env:RUN_ROOT `
             -Rid $env:RID `
             -RequireServiceProof
