@@ -6,7 +6,9 @@ param(
     [string] $Name,
     [switch] $RestartService,
     [switch] $Defaults,
-    [switch] $SkipSetup
+    [switch] $SkipSetup,
+    [switch] $AddToPath,
+    [switch] $SkipPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,6 +99,12 @@ function Save-ReleaseAsset($Release, [string] $AssetName, [string] $Destination,
 
 try {
     if ($Defaults -and $SkipSetup) { throw '-Defaults and -SkipSetup cannot be used together.' }
+    if ($AddToPath -and $SkipPath) { throw '-AddToPath and -SkipPath cannot be used together.' }
+    if ($SkipSetup -and ($AddToPath -or $SkipPath)) { throw 'PATH options require setup; remove -SkipSetup.' }
+    $interactiveConsole = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+    if ($AddToPath -and -not $Defaults -and -not $interactiveConsole) {
+        throw '-AddToPath requires an interactive console or -Defaults for unattended setup.'
+    }
     $rid = Get-RuntimeId
     if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version must be a stable X.Y.Z release.' }
     if (-not $InstallDir) {
@@ -165,6 +173,8 @@ try {
     $setupArgs = @('setup', '--if-needed')
     if ($ConfigFile) { $setupArgs += @('--config-file', $ConfigFile) }
     if ($Name) { $setupArgs += @('--name', $Name) }
+    if ($AddToPath) { $setupArgs += '--add-to-path' }
+    if ($SkipPath) { $setupArgs += '--skip-path' }
     if ($SkipSetup) {
         Write-Output "Installed executable: $installed"
         Write-Output 'Run it with: setup --if-needed'
@@ -173,7 +183,7 @@ try {
     } elseif ($Defaults) {
         & $installed @setupArgs --defaults --yes
         exit $LASTEXITCODE
-    } elseif ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+    } elseif ($interactiveConsole) {
         & $installed @setupArgs
         exit $LASTEXITCODE
     } else {
@@ -181,6 +191,7 @@ try {
         Write-Output 'Run it with: setup --if-needed'
         if ($ConfigFile) { Write-Output "  --config-file: $ConfigFile" }
         if ($Name) { Write-Output "  --name: $Name" }
+        if ($SkipPath) { Write-Output '  --skip-path' }
     }
     exit 0
 } catch {

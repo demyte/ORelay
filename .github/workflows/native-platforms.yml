@@ -205,6 +205,23 @@ jobs:
             -Rid $env:RID
           if ($LASTEXITCODE -ne 0) { throw "Setup smoke failed with exit code $LASTEXITCODE." }
 
+      - name: Exercise native user PATH setup
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @(
+            '-NoProfile', '-File', '.github/workflows/user-path-smoke.ps1',
+            '-ExecutablePath', (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME),
+            '-RunRoot', $env:RUN_ROOT,
+            '-Rid', $env:RID
+          )
+          if ($env:RID.StartsWith('win-')) { $arguments += '-AllowWindowsUserPath' }
+          & pwsh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "User PATH smoke failed with exit code $LASTEXITCODE." }
+
       - name: Install standalone executable
         shell: pwsh
         env:

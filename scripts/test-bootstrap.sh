@@ -115,13 +115,20 @@ printf '%s\n' 'script source must never become wizard input' | \
 PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
   ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
   $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" \
-  --config-file "$test_root/state file.json" --name 'relay service' --defaults
+  --config-file "$test_root/state file.json" --name 'relay service' --defaults --add-to-path
 [ "$(sed -n '1p' "$test_root/setup-args")" = "$test_root/install path/orelay" ] || {
   printf 'Setup did not run from the installed executable.\n' >&2; exit 1;
 }
-for arg in setup --if-needed --defaults --yes "$test_root/state file.json" 'relay service'; do
+for arg in setup --if-needed --defaults --yes --add-to-path "$test_root/state file.json" 'relay service'; do
   grep -Fxq -- "$arg" "$test_root/setup-args" || { printf 'Missing setup argument: %s\n' "$arg" >&2; exit 1; }
 done
+PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+  ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
+  $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" --defaults --skip-path
+grep -Fxq -- '--skip-path' "$test_root/setup-args"
+if grep -Fxq -- '--add-to-path' "$test_root/setup-args"; then
+  printf 'Skip PATH setup also forwarded add-to-path.\n' >&2; exit 1
+fi
 if PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
   ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 FIXTURE_SETUP_EXIT=23 \
   $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" --defaults >/dev/null 2>&1; then
@@ -143,6 +150,15 @@ grep -Fxq -- '  --name: relay service' "$test_root/skip-output"
 if sh "$root/install.sh" --defaults --skip-setup > /dev/null 2>&1; then
   printf 'Conflicting setup flags were accepted.\n' >&2; exit 1
 fi
+for flags in '--add-to-path --skip-path' '--add-to-path --skip-setup' '--skip-path --skip-setup' '--add-to-path'; do
+  rm -f "$test_root/args"
+  if PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \
+    ARG_LOG="$test_root/args" SETUP_LOG="$test_root/setup-args" FIXTURE_OS=Linux FIXTURE_ARCH=x86_64 \
+    $no_tty sh "$root/install.sh" --version 1.2.3 --install-dir "$test_root/install path" $flags > /dev/null 2>&1; then
+    printf 'Invalid PATH flags succeeded: %s\n' "$flags" >&2; exit 1
+  fi
+  [ ! -e "$test_root/args" ] || { printf 'Invalid PATH flags reached installation: %s\n' "$flags" >&2; exit 1; }
+done
 
 for pair in 'Linux x86_64 linux-x64' 'Linux aarch64 linux-arm64' 'Darwin x86_64 osx-x64' 'Darwin arm64 osx-arm64'; do
   set -- $pair

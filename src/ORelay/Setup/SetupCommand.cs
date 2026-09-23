@@ -15,12 +15,14 @@ internal sealed class SetupRuntime
     public bool Interactive { get; init; } = !Console.IsInputRedirected && !Console.IsOutputRedirected;
     public bool ServicesSupported { get; init; } = OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
     public ITailscaleStatusProvider Tailscale { get; init; } = new TailscaleStatusProcessProvider();
+    public IUserPathManager UserPath { get; init; } = new UserPathManager();
+    public string InstallationDirectory { get; init; } = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
     public Func<ServiceOperation, string, string, ServiceOperationResult> Service { get; init; } =
         (operation, path, name) => ServiceCommandExecutor.Execute(operation, path, name);
 }
 
 internal sealed record SetupResult(bool Succeeded, bool Changed, bool Skipped, string ConfigFile,
-    string Message, string? CallbackUrl = null, string? Mode = null, string? ServiceName = null);
+    string Message, string? CallbackUrl = null, string? Mode = null, string? ServiceName = null, bool PathChanged = false);
 
 internal static class SetupCommand
 {
@@ -33,8 +35,16 @@ internal static class SetupCommand
         {
             var existing = store.Exists ? store.Read() : null;
             if (existing is not null && (setup.IfNeeded || setup.Defaults))
-                return await Finish(new(true, false, true, store.FilePath,
-                    "Existing configuration preserved. Run 'orelay setup' to review or change it."), options, output, error).ConfigureAwait(false);
+            {
+                var preserved = new SetupResult(true, false, true, store.FilePath,
+                    "Existing configuration preserved. Run 'orelay setup' to review or change it.");
+                var existingPathPlan = await SelectPathPlan(options, runtime, output).ConfigureAwait(false);
+                if (existingPathPlan is null)
+                    return await Finish(preserved, options, output, error).ConfigureAwait(false);
+                if (!setup.Yes && !await YesNo(runtime, output, "Apply the PATH change?", true).ConfigureAwait(false))
+                    return await Finish(preserved with { Message = "Setup cancelled. Nothing was changed." }, options, output, error).ConfigureAwait(false);
+                return await Finish(ApplyPath(preserved, existingPathPlan, runtime), options, output, error).ConfigureAwait(false);
+            }
 
             if (!setup.Yes && (!runtime.Interactive || options.IsJson))
                 throw new InvalidOperationException("Setup needs an interactive terminal. Use 'setup --defaults --yes' for defaults, or 'setup --yes' with explicit options for unattended setup.");
@@ -103,9 +113,11 @@ internal static class SetupCommand
             if (selectedAccess is "lan" or "tailscale" && RelayServerOptions.IsLoopbackBind(settings.Bind))
                 throw new InvalidOperationException("LAN and Tailscale access require a reachable non-loopback bind address.");
 
+            var pathPlan = await SelectPathPlan(options, runtime, output).ConfigureAwait(false);
             if (!options.IsJson)
             {
                 await Describe(output, settings, mode, name, start, enableStartup, store.FilePath, "Settings to apply", callback).ConfigureAwait(false);
+                await output.WriteLineAsync(pathPlan is null ? "  User PATH: unchanged" : $"  User PATH: {pathPlan.Directory}\n  {pathPlan.Description}").ConfigureAwait(false);
                 if (!RelayServerOptions.IsLoopbackBind(settings.Bind))
                     await output.WriteLineAsync("Shared access permits remote callbacks. Anyone who can reach the management API can manage registrations. Setup does not change firewall rules; restrict access to trusted computers.").ConfigureAwait(false);
                 if (mode == "foreground")
@@ -145,9 +157,10 @@ internal static class SetupCommand
                         callback, mode, name), options, output, error).ConfigureAwait(false);
                 }
             }
-            return await Finish(new(true, changed, false, store.FilePath,
+            var completed = new SetupResult(true, changed, false, store.FilePath,
                 mode == "service" ? "Configuration and service setup completed." : "Configuration saved. Start the relay with the command below.",
-                callback, mode, mode == "service" ? name : null), options, output, error).ConfigureAwait(false);
+                callback, mode, mode == "service" ? name : null);
+            return await Finish(ApplyPath(completed, pathPlan, runtime), options, output, error).ConfigureAwait(false);
 
             bool ApplyService(ServiceOperation operation)
             {
@@ -163,6 +176,50 @@ internal static class SetupCommand
         catch (Exception ex) when (ex is RelayConfigurationException or ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
             return await Finish(new(false, false, false, store.FilePath, ex.Message), options, output, error).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<UserPathPlan?> SelectPathPlan(CliOptions options, SetupRuntime runtime, TextWriter output)
+    {
+        var setup = options.Setup!;
+        if (setup.SkipPath || (!setup.AddToPath && (setup.Yes || !runtime.Interactive || options.IsJson))) return null;
+        if (!setup.Yes && (!runtime.Interactive || options.IsJson))
+            throw new InvalidOperationException("Adding to PATH without an interactive terminal requires --yes.");
+        UserPathPlan plan;
+        try { plan = runtime.UserPath.Inspect(runtime.InstallationDirectory); }
+        catch (Exception ex) when (!setup.AddToPath && ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            await output.WriteLineAsync($"PATH setup unavailable: {ex.Message}").ConfigureAwait(false);
+            return null;
+        }
+        if (!options.IsJson)
+            await output.WriteLineAsync($"Installation directory: {plan.Directory}\n{plan.Description}").ConfigureAwait(false);
+        if (plan.AlreadyConfigured) return null;
+        return setup.AddToPath || await YesNo(runtime, output, "Add this directory to your user PATH?", true).ConfigureAwait(false) ? plan : null;
+    }
+
+    private static SetupResult ApplyPath(SetupResult result, UserPathPlan? plan, SetupRuntime runtime)
+    {
+        if (plan is null) return result;
+        try
+        {
+            var changed = runtime.UserPath.Apply(plan);
+            return result with
+            {
+                Changed = result.Changed || changed,
+                Skipped = result.Skipped && !changed,
+                PathChanged = changed,
+                Message = result.Message + " User PATH is configured. Open a new terminal to run orelay commands."
+            };
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return result with
+            {
+                Succeeded = false,
+                Skipped = false,
+                Message = result.Message + $" PATH setup did not complete: {ex.Message} Completed changes remain applied. Rerun setup to finish PATH configuration."
+            };
         }
     }
 

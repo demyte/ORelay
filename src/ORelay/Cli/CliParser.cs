@@ -181,7 +181,7 @@ public static class CliParser
         for (var index = 1; index < arguments.Count; index++)
         {
             var argument = arguments[index];
-            if (argument is "--defaults" or "--yes" or "--if-needed" or "--start" or "--enable-startup")
+            if (argument is "--defaults" or "--yes" or "--if-needed" or "--start" or "--enable-startup" or "--add-to-path" or "--skip-path")
             {
                 if (!flags.Add(argument)) return CliParseResult.Failure($"{argument} may be specified only once");
                 continue;
@@ -212,9 +212,12 @@ public static class CliParser
             return CliParseResult.Failure("--defaults cannot be combined with custom settings or service actions");
         if (flags.Contains("--yes") && mode != "service" && (flags.Contains("--start") || flags.Contains("--enable-startup")))
             return CliParseResult.Failure("--start and --enable-startup require --mode service");
+        if (flags.Contains("--add-to-path") && flags.Contains("--skip-path"))
+            return CliParseResult.Failure("--add-to-path and --skip-path cannot be combined");
         return CliParseResult.Success(new CliOptions(CliCommand.Setup, isJson, configFile, SettingsPatch: settings,
             Setup: new SetupCommandOptions(flags.Contains("--defaults"), flags.Contains("--yes"), flags.Contains("--if-needed"),
-                access, mode, serviceName, flags.Contains("--start"), flags.Contains("--enable-startup"))));
+                access, mode, serviceName, flags.Contains("--start"), flags.Contains("--enable-startup"),
+                flags.Contains("--add-to-path"), flags.Contains("--skip-path"))));
     }
 
     private static CliParseResult ParseConfig(

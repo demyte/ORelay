@@ -196,6 +196,98 @@ public sealed class SetupCommandTests
         Assert.Equal([ServiceOperation.Status, ServiceOperation.Install], run.ServiceOperations);
     }
 
+    [Fact]
+    public async Task PathOfferIsReviewedAndCancellationAppliesNothing()
+    {
+        using var run = new TestRun();
+        run.UserPath.Configured = false;
+        var cancelled = await run.Execute("1\ny\nn\n", "setup");
+        Assert.Equal(0, cancelled.ExitCode);
+        Assert.Contains("Add this directory to your user PATH?", cancelled.Output);
+        Assert.Contains("User PATH: ", cancelled.Output);
+        Assert.Equal(0, run.UserPath.Writes);
+        Assert.False(File.Exists(run.ConfigFile));
+
+        var accepted = await run.Execute("1\ny\ny\n", "setup");
+        Assert.Equal(0, accepted.ExitCode);
+        Assert.Equal(1, run.UserPath.Writes);
+        Assert.Contains("Open a new terminal", accepted.Output);
+        Assert.True(File.Exists(run.ConfigFile));
+    }
+
+    [Theory]
+    [InlineData("1\nn\ny\n", false)]
+    [InlineData("1\ny\n", true)]
+    public async Task DecliningOrSkippingPathStillSavesConfiguration(string answers, bool skipPath)
+    {
+        using var run = new TestRun();
+        run.UserPath.Configured = false;
+        var result = await run.Execute(answers, skipPath ? ["setup", "--skip-path"] : ["setup"]);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, run.UserPath.Writes);
+        Assert.True(File.Exists(run.ConfigFile));
+    }
+
+    [Fact]
+    public async Task UnattendedPathChangeRequiresExplicitFlagAndPreservesExistingConfig()
+    {
+        using var run = new TestRun(interactive: false);
+        run.UserPath.Configured = false;
+        Assert.Equal(0, (await run.Execute("", "setup", "--defaults", "--yes")).ExitCode);
+        Assert.Equal(0, run.UserPath.Inspections);
+        Assert.Equal(0, run.UserPath.Writes);
+        var original = File.ReadAllBytes(run.ConfigFile);
+
+        var result = await run.Execute("", "setup", "--if-needed", "--yes", "--add-to-path", "--json");
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, run.UserPath.Writes);
+        Assert.Equal(original, File.ReadAllBytes(run.ConfigFile));
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.True(json.RootElement.GetProperty("pathChanged").GetBoolean());
+        Assert.True(json.RootElement.GetProperty("changed").GetBoolean());
+        Assert.False(json.RootElement.GetProperty("skipped").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ReinstallOffersPathWithoutRewritingConfiguration()
+    {
+        using var run = new TestRun();
+        await run.Execute("", "setup", "--defaults", "--yes");
+        var original = File.ReadAllBytes(run.ConfigFile);
+        run.UserPath.Configured = false;
+        var result = await run.Execute("y\ny\n", "setup", "--if-needed");
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, run.UserPath.Writes);
+        Assert.Equal(original, File.ReadAllBytes(run.ConfigFile));
+        Assert.DoesNotContain("Go with defaults", result.Output);
+    }
+
+    [Fact]
+    public async Task PathFailureReportsThatSavedConfigurationRemains()
+    {
+        using var run = new TestRun(interactive: false);
+        run.UserPath.Configured = false;
+        run.UserPath.FailWrite = true;
+        var result = await run.Execute("", "setup", "--defaults", "--yes", "--add-to-path", "--json");
+        Assert.Equal(3, result.ExitCode);
+        Assert.True(File.Exists(run.ConfigFile));
+        Assert.Contains("PATH setup did not complete", result.Error);
+        using var json = JsonDocument.Parse(result.Output);
+        Assert.True(json.RootElement.GetProperty("changed").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("--add-to-path", "--skip-path")]
+    [InlineData("--add-to-path", "--add-to-path")]
+    public async Task ConflictingPathOptionsFailBeforeWriting(string first, string second)
+    {
+        using var run = new TestRun();
+        var result = await run.Execute("", "setup", "--defaults", "--yes", first, second);
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.False(File.Exists(run.ConfigFile));
+        Assert.Equal(0, run.UserPath.Inspections);
+    }
+
     private sealed class TestRun : IDisposable
     {
         private readonly bool _interactive;
@@ -212,6 +304,7 @@ public sealed class SetupCommandTests
         public string ConfigFile => Path.Combine(_directory, "orelay.json");
         public List<ServiceOperation> ServiceOperations { get; } = [];
         public Func<ServiceOperation, string, string, ServiceOperationResult>? Service { get; set; }
+        public FakeUserPath UserPath { get; } = new();
 
         public async Task<(int ExitCode, string Output, string Error)> Execute(string input, params string[] args)
         {
@@ -224,6 +317,7 @@ public sealed class SetupCommandTests
                 Interactive = _interactive,
                 ServicesSupported = true,
                 Tailscale = new FakeTailscale(_tailscale),
+                UserPath = UserPath,
                 Service = (operation, path, name) =>
                 {
                     ServiceOperations.Add(operation);
@@ -237,6 +331,28 @@ public sealed class SetupCommandTests
         }
 
         public void Dispose() => Directory.Delete(_directory, recursive: true);
+    }
+
+    private sealed class FakeUserPath : IUserPathManager
+    {
+        public bool Configured { get; set; } = true;
+        public bool FailWrite { get; set; }
+        public int Inspections { get; private set; }
+        public int Writes { get; private set; }
+
+        public UserPathPlan Inspect(string installationDirectory)
+        {
+            Inspections++;
+            return new(installationDirectory, Configured, "Add to the test user's PATH. Open a new terminal after setup.");
+        }
+
+        public bool Apply(UserPathPlan plan)
+        {
+            if (FailWrite) throw new IOException("profile is read-only");
+            Writes++;
+            Configured = true;
+            return true;
+        }
     }
 
     private sealed class FakeTailscale(TailscaleStatusSnapshot snapshot) : ITailscaleStatusProvider

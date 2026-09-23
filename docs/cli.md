@@ -19,17 +19,22 @@ Custom setup asks about local, LAN, or Tailscale access, port, bind address, adv
 
 Tailscale must already be installed and connected. Setup checks discovery before saving. The Tailscale preset binds all IPv4 interfaces and discovers the advertised hostname; it does not restrict access to the tailnet or configure firewall rules. Choose a specific interface address when needed. LAN access defaults to the machine hostname. Confirm that the browser and consuming apps can reach the advertised address. Shared management has no authentication in this version.
 
-Existing configurations are offered as the starting point. Interactive cancellation or ended input applies no changes. Setup saves the reviewed settings in one atomic write and rejects concurrent configuration changes. `--if-needed` skips setup when a valid file already exists, as does `--defaults`. Use plain `setup` to revisit an installation.
+Setup offers to add the executable's directory to your user PATH so a new terminal can run `orelay` from any folder. This also works with a custom installation directory. Review the destination and confirm before the change is applied. `--skip-path` disables this offer. Unattended `--yes` leaves PATH unchanged unless you also pass `--add-to-path`.
+
+On Windows, setup updates the user PATH. For sh, bash, zsh, and fish, it appends a quoted PATH entry to the user's shell startup files and preserves their existing content. Bash updates both its interactive and login profiles; zsh respects `ZDOTDIR`, and fish respects `XDG_CONFIG_HOME`. Setup prints the files it will change. Other shells require manual PATH configuration. Changes apply to the account running setup, including when run as root or another administrator.
+
+Existing configurations are offered as the starting point. Interactive cancellation or ended input applies no changes. Setup saves the reviewed settings in one atomic write and rejects concurrent configuration changes. `--if-needed` and `--defaults` preserve a valid existing configuration while still allowing PATH setup. Use plain `setup` to revisit relay settings.
 
 For unattended operation, use `--yes`. It accepts the displayed choices without prompting and can be combined with `--json`:
 
 ```text
 orelay setup --defaults --yes
+orelay setup --defaults --yes --add-to-path
 orelay --config-file /data/orelay.json setup --yes --access lan --port 13000 --bind 192.168.1.20 --hostname relay.example.test
 orelay --config-file <absolute-config-path> setup --yes --access tailscale --mode service --name orelay-dev --enable-startup --start
 ```
 
-Service setup requires administrative privileges and a stable published executable. Setup checks the selected service's ownership before saving, but later service-manager actions can fail. In that case, the saved configuration and any completed service actions remain applied. Correct the reported problem and rerun with the same name and configuration path. Service mode without `--enable-startup` selects manual startup. Foreground mode leaves existing service installations in place.
+Service setup requires administrative privileges and a stable published executable. Setup checks the selected service's ownership before saving, but later service-manager or PATH actions can fail. In that case, the saved configuration and any completed actions remain applied. Correct the reported problem and rerun with the same name and configuration path. Service mode without `--enable-startup` selects manual startup. Foreground mode leaves existing service installations in place.
 
 ## Configuration
 
@@ -126,7 +131,7 @@ orelay --config-file <absolute-config-path> update --restart-service --name <ser
 
 An existing executable with the same version is skipped only when its SHA-256 matches the source. Different builds of the same version are replaced; newer versions are never implicitly downgraded. Linked executable, directory, and lock-file paths are rejected before locking the destination.
 
-After installation, the bootstrap runs `setup --if-needed` from the installed executable when a terminal is available. Existing configuration is preserved on repeat installs. Pass `-Defaults` to the PowerShell script or `--defaults` to the shell script to accept local foreground defaults without questions. Pass `-SkipSetup` or `--skip-setup` to install only. Without a terminal, setup is skipped unless defaults were explicitly requested; the script prints the command to run later. Script options `-ConfigFile`/`--config-file` and `-Name`/`--name` also apply to setup.
+After installation, the bootstrap runs `setup --if-needed` from the installed executable when a terminal is available. Existing configuration is preserved on repeat installs. Pass `-Defaults` to the PowerShell script or `--defaults` to the shell script to accept local foreground defaults without questions. Add `-AddToPath` or `--add-to-path` to configure user PATH unattended, or use `-SkipPath` or `--skip-path` to suppress the interactive offer. Pass `-SkipSetup` or `--skip-setup` to install only; it cannot be combined with PATH options. Without a terminal, setup is skipped unless defaults were explicitly requested; an explicit PATH addition requires defaults in that case. Script options `-ConfigFile`/`--config-file` and `-Name`/`--name` also apply to setup.
 
 `update --check` reads the latest stable GitHub release. `update` verifies the matching archive checksum and executable version before replacing the installed binary. Development builds are never implicitly downgraded to an older stable release. Managed `dotnet run` builds do not support installation or updates.
 

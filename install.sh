@@ -9,9 +9,11 @@ service_name=''
 restart_service=0
 setup_defaults=0
 skip_setup=0
+add_to_path=0
+skip_path=0
 
 usage() {
-    printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--install-dir PATH] [--config-file PATH] [--restart-service] [--name SERVICE] [--defaults | --skip-setup]'
+    printf '%s\n' 'Usage: install.sh [--version X.Y.Z] [--install-dir PATH] [--config-file PATH] [--restart-service] [--name SERVICE] [--defaults | --skip-setup] [--add-to-path | --skip-path]'
 }
 
 while [ "$#" -gt 0 ]; do
@@ -31,6 +33,8 @@ while [ "$#" -gt 0 ]; do
         --restart-service) restart_service=1; shift ;;
         --defaults) setup_defaults=1; shift ;;
         --skip-setup) skip_setup=1; shift ;;
+        --add-to-path) add_to_path=1; shift ;;
+        --skip-path) skip_path=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
@@ -38,6 +42,19 @@ done
 [ "$setup_defaults" -eq 0 ] || [ "$skip_setup" -eq 0 ] || {
     printf '%s\n' '--defaults and --skip-setup cannot be used together.' >&2; exit 2;
 }
+[ "$add_to_path" -eq 0 ] || [ "$skip_path" -eq 0 ] || {
+    printf '%s\n' '--add-to-path and --skip-path cannot be used together.' >&2; exit 2;
+}
+[ "$skip_setup" -eq 0 ] || { [ "$add_to_path" -eq 0 ] && [ "$skip_path" -eq 0 ]; } || {
+    printf '%s\n' 'PATH options require setup; remove --skip-setup.' >&2; exit 2;
+}
+interactive_terminal=0
+if [ -t 1 ] && ( : </dev/tty ) 2>/dev/null && ( test -t 3 ) 3</dev/tty 2>/dev/null; then
+    interactive_terminal=1
+fi
+if [ "$add_to_path" -eq 1 ] && [ "$setup_defaults" -eq 0 ] && [ "$interactive_terminal" -eq 0 ]; then
+    printf '%s\n' '--add-to-path requires a terminal or --defaults for unattended setup.' >&2; exit 2
+fi
 
 case "$(uname -s)" in
     Linux) os=linux ;;
@@ -152,11 +169,14 @@ installed="$install_dir/orelay"
 set -- setup --if-needed
 [ -z "$config_file" ] || set -- "$@" --config-file "$config_file"
 [ -z "$service_name" ] || set -- "$@" --name "$service_name"
+[ "$add_to_path" -eq 0 ] || set -- "$@" --add-to-path
+[ "$skip_path" -eq 0 ] || set -- "$@" --skip-path
 print_setup_next_step() {
     printf 'Installed executable: %s\n' "$installed"
     printf '%s\n' 'Run it with: setup --if-needed'
     [ -z "$config_file" ] || printf '  --config-file: %s\n' "$config_file"
     [ -z "$service_name" ] || printf '  --name: %s\n' "$service_name"
+    [ "$skip_path" -eq 0 ] || printf '%s\n' '  --skip-path'
 }
 if [ "$skip_setup" -eq 1 ]; then
     print_setup_next_step
@@ -164,7 +184,7 @@ elif [ "$setup_defaults" -eq 1 ]; then
     "$installed" "$@" --defaults --yes
 else
     # A piped installer owns standard input. The wizard must use the terminal directly.
-    if [ -t 1 ] && ( : </dev/tty ) 2>/dev/null && ( test -t 3 ) 3</dev/tty 2>/dev/null; then
+    if [ "$interactive_terminal" -eq 1 ]; then
         "$installed" "$@" </dev/tty
     else
         print_setup_next_step

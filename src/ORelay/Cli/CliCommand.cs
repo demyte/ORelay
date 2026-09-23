@@ -49,7 +49,8 @@ public sealed record InstallCommandOptions(string? InstallDirectory, bool Restar
 
 public sealed record SetupCommandOptions(
     bool Defaults, bool Yes, bool IfNeeded, string? Access = null, string? Mode = null,
-    string? Name = null, bool Start = false, bool EnableStartup = false);
+    string? Name = null, bool Start = false, bool EnableStartup = false,
+    bool AddToPath = false, bool SkipPath = false);
 
 public sealed record CliHelpRequest(CliCommand Command, string? Topic);
 

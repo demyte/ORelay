@@ -30,11 +30,11 @@ powershell -NoProfile -Command "irm https://raw.githubusercontent.com/demyte/ORe
 curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh | sh
 ```
 
-Installs to `%LOCALAPPDATA%\ORelay` on Windows or `~/.local/bin` on macOS and Linux. Add that directory to your `PATH` if needed. Rerun the command to upgrade; existing configuration and registration data are preserved.
+Installs to `%LOCALAPPDATA%\ORelay` on Windows or `~/.local/bin` on macOS and Linux. Setup offers to add that directory to your user `PATH`. After accepting, open a new terminal to run `orelay` commands from any folder. Rerun the installer to upgrade; existing configuration and registration data are preserved.
 
 On first installation in a terminal, setup shows what the defaults mean and offers **Go with defaults** or **Customize**. Defaults keep ORelay local on port `12987`, with no background service. Customize to choose a port, bind address, LAN or Tailscale access, and service startup on Windows or Linux. Confirm the summary to save. Run `orelay setup` again to change these choices. Existing settings are preserved when you rerun the installer.
 
-For unattended installation, use `-Defaults` with the PowerShell script or `--defaults` with the shell script. `-SkipSetup` or `--skip-setup` installs only. See [setup options](docs/cli.md#setup) for unattended custom configuration.
+For unattended installation, use `-Defaults` with the PowerShell script or `--defaults` with the shell script. Add `-AddToPath` or `--add-to-path` to configure PATH too. `-SkipPath` or `--skip-path` leaves PATH unchanged; `-SkipSetup` or `--skip-setup` installs only. See [setup options](docs/cli.md#setup) for unattended custom configuration.
 
 <details>
 <summary>Installation options and manual downloads</summary>

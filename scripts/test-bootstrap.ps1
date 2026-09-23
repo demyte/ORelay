@@ -94,13 +94,17 @@ exit /b %ERRORLEVEL%
     }
     if (Test-Path -LiteralPath $env:SETUP_LOG) { throw 'Unattended install unexpectedly started setup.' }
 
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults
+    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults -AddToPath
     if ($LASTEXITCODE -ne 0) { throw "Default setup failed with exit code $LASTEXITCODE." }
     $setupActual = Get-Content -LiteralPath $env:SETUP_LOG
     if ($setupActual[0] -ine (Join-Path $testRoot 'install path\orelay.exe')) { throw 'Setup did not run from installed executable.' }
-    foreach ($expected in @('setup', '--if-needed', '--config-file', (Join-Path $testRoot 'state file.json'), '--name', 'relay service', '--defaults', '--yes')) {
+    foreach ($expected in @('setup', '--if-needed', '--config-file', (Join-Path $testRoot 'state file.json'), '--name', 'relay service', '--defaults', '--yes', '--add-to-path')) {
         if ($setupActual -cnotcontains $expected) { throw "Setup argument was not preserved: $expected" }
     }
+    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults -SkipPath
+    if ($LASTEXITCODE -ne 0) { throw "Skip PATH setup failed with exit code $LASTEXITCODE." }
+    $setupActual = Get-Content -LiteralPath $env:SETUP_LOG
+    if ($setupActual -cnotcontains '--skip-path' -or $setupActual -ccontains '--add-to-path') { throw 'Skip PATH option was not forwarded correctly.' }
     $env:FIXTURE_SETUP_EXIT = '23'
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults
     if ($LASTEXITCODE -ne 23) { throw "Setup exit code was not passed through. Expected 23, got $LASTEXITCODE." }
@@ -114,6 +118,14 @@ exit /b %ERRORLEVEL%
     $conflictCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($conflictCode -eq 0) { throw 'Conflicting setup flags were accepted.' }
+    foreach ($invalidFlags in @(@('-AddToPath', '-SkipPath'), @('-AddToPath', '-SkipSetup'), @('-SkipPath', '-SkipSetup'), @('-AddToPath'))) {
+        Remove-Item -LiteralPath $env:ARG_LOG -ErrorAction SilentlyContinue
+        $ErrorActionPreference = 'Continue'
+        $invalidOutput = & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments @invalidFlags 2>&1
+        $invalidCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorPreference
+        if ($invalidCode -eq 0 -or (Test-Path -LiteralPath $env:ARG_LOG)) { throw "Invalid PATH flags started download or install: $($invalidFlags -join ' ')" }
+    }
     $env:FIXTURE_EXIT = '17'
     & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments
     if ($LASTEXITCODE -ne 17) { throw "Installer exit code was not passed through. Expected 17, got $LASTEXITCODE." }

@@ -108,12 +108,15 @@ public static class CliApplication
                 builder.AppendLine("    [--hostname <host>] [--public-url <url>] [--auto-discovery <none|local|tailscale>]");
                 builder.AppendLine("    [--lease-seconds <number>] [--max-registrations <number>]");
                 builder.AppendLine("    [--mode <foreground|service>] [--name <service>] [--start] [--enable-startup] [--json]");
+                builder.AppendLine("    [--add-to-path | --skip-path]");
                 builder.AppendLine();
                 builder.AppendLine("Show defaults or customize settings, then confirm before applying them.");
                 builder.AppendLine("Defaults: local access, 127.0.0.1:12987, callback http://localhost:12987/callback,");
                 builder.AppendLine("no discovery, foreground operation, no service or boot startup.");
                 builder.AppendLine("--yes applies without questions. JSON and redirected input require --yes.");
                 builder.AppendLine("--defaults and --if-needed preserve an existing valid configuration.");
+                builder.AppendLine("Setup offers to add this executable's directory to your user PATH. Open a new terminal afterward.");
+                builder.AppendLine("--yes changes PATH only with --add-to-path. --skip-path disables the PATH offer.");
                 builder.AppendLine("--start starts or restarts the selected service. --enable-startup enables boot startup.");
                 builder.AppendLine("Service mode requires Windows/Linux administrative privileges; it does not elevate.");
                 builder.AppendLine("Example: orelay setup --defaults --yes");
