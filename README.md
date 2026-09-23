@@ -1,77 +1,75 @@
 # ORelay
 
-ORelay routes OAuth 2 authorization callbacks to development worktrees. Register one fixed callback URL with a provider such as Xero, then run multiple worktrees on different ports. Each worktree gets its own temporary registration ID.
+One OAuth callback URL for all your development worktrees.
+
+ORelay routes OAuth 2 authorization callbacks to the worktree that started the flow. Register one fixed callback URL with a provider such as Xero, then run multiple worktrees on different ports. Each worktree gets its own temporary registration ID.
 
 ```text
 Provider → ORelay /callback → browser redirect → the registered worktree
 ```
 
-The worktree validates state and exchanges the authorization code directly with the provider. It owns its tokens and refresh logic. Use the fixed relay `redirect_uri` for both the authorization request and token exchange. Provider consent and grant rules still apply; separate worktrees do not guarantee separate provider grants.
+The worktree validates state, exchanges the authorization code, and owns its tokens. ORelay handles callback routing. Provider consent and grant rules still apply; separate worktrees do not guarantee separate provider grants.
 
-## Run
+ORelay ships as one native executable for Windows, Linux, and macOS, on x64 and ARM64. It includes SQLite and runs without installing .NET or SQLite. A separate `ORelay.Aspire.Hosting` library connects applications managed by Aspire.
 
-ORelay is a .NET 10 application published as a self-contained Native AOT executable. The published executable runs without installing .NET. See [versions and releases](docs/releases.md) for tag-driven downloads and the GitHub Packages feed, and [native builds and platform verification](docs/native-platforms.md) for the platform matrix and build prerequisites. The [v1 handoff](docs/v1-handoff.md) records the initial implementation and verification.
+## Install
 
-```text
-orelay init
-orelay server --port 12987 --bind 127.0.0.1
-orelay doctor
+Run the command for your platform. The installer downloads the matching executable and verifies its checksum. No .NET installation, GitHub account, or GitHub CLI is required.
+
+> The bootstrap, self-updater, and persistent registrations are new in this checkout. Published versions through `v0.1.2` do not include them. The commands below need the first release containing these changes.
+
+### Windows · PowerShell
+
+```powershell
+powershell -NoProfile -Command "irm https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1 | iex"
 ```
 
-Register `http://localhost:12987/callback` with your provider if its redirect-URI policy allows that address. The browser completing authorization must be able to reach both ORelay and the destination worktree. ORelay returns a browser redirect; it does not make a server-to-server callback request.
+### macOS and Linux · Shell
 
-The server, `init`, and `doctor --fix` create a missing `orelay.json` beside the executable with these defaults, plus any supplied setting overrides. Existing files are preserved.
-
-```json
-{
-  "schemaVersion": 1,
-  "port": 12987,
-  "bind": "127.0.0.1",
-  "hostname": "localhost",
-  "autoDiscovery": "none",
-  "leaseSeconds": 300,
-  "maxRegistrations": 1000
-}
+```sh
+curl -fsSL https://raw.githubusercontent.com/demyte/ORelay/main/install.sh | sh
 ```
 
-Use a writable path when running from a protected installation directory, a service, or a container:
+Installs to `%LOCALAPPDATA%\ORelay` on Windows or `~/.local/bin` on macOS and Linux. Setup offers to add that directory to your user `PATH`. After accepting, open a new terminal to run `orelay` commands from any folder. Rerun the installer to upgrade; existing configuration and registration data are preserved.
+
+On first installation in a terminal, setup shows what the defaults mean and offers **Go with defaults** or **Customize**. Defaults keep ORelay local on port `12987`, with no background service. Customize to choose a port, bind address, LAN or Tailscale access, and service startup on Windows or Linux. Confirm the summary to save. Run `orelay setup` again to change these choices. Existing settings are preserved when you rerun the installer.
+
+For unattended installation, use `-Defaults` with the PowerShell script or `--defaults` with the shell script. Add `-AddToPath` or `--add-to-path` to configure PATH too. `-SkipPath` or `--skip-path` leaves PATH unchanged; `-SkipSetup` or `--skip-setup` installs only. See [setup options](docs/cli.md#setup) for unattended custom configuration.
+
+<details>
+<summary>Installation options and manual downloads</summary>
+
+To choose another directory, download the [PowerShell installer](install.ps1) and run it with `-InstallDir <path>`, or the [shell installer](install.sh) with `--install-dir <path>`. The Unix installer requires `curl`, `tar`, and a SHA-256 tool available on the supported systems.
+
+For manual installation, download the archive for your OS and architecture from [Releases](https://github.com/demyte/ORelay/releases), verify its `.sha256` file, and extract it. Run the extracted executable with `install --install-dir <path>` to put it in a stable location. The [platform guide](docs/native-platforms.md) lists tested OS versions.
+
+</details>
+
+## Quick start
 
 ```text
-orelay --config-file /data/orelay.json init --port 12987
+orelay setup
+orelay server
+```
+
+In another terminal, run `orelay doctor`. Register `http://localhost:12987/callback` with your OAuth provider if its redirect-URI policy allows that address. Use this same `redirect_uri` for authorization and code exchange.
+
+The defaults are port `12987`, a loopback listener at `127.0.0.1`, a five-minute lease, and capacity for 1,000 registrations. The browser completing authorization must be able to reach both ORelay and the destination worktree.
+
+`init` and the server create a missing `orelay.json` beside the executable. For a service or a protected installation directory, select a writable configuration path:
+
+```text
+orelay --config-file /data/orelay.json init
 orelay --config-file /data/orelay.json server
 ```
 
-Run `orelay --help` or append `--help` to a command. Commands run without interactive prompts. [CLI reference](docs/cli.md) covers settings, JSON output, exit codes, and services.
+Registrations are stored in a sibling SQLite file, such as `/data/orelay.registrations.db`. Updates preserve that file. Unexpired registrations survive relay restarts; expiry continues while the relay is stopped. Applications must restart explicitly if their lease expires or their registration is deleted.
 
-Server logs show timestamps and coloured levels for startup, registrations, callback routing, rejections, and shutdown. They go to stderr, with plain text when redirected. Set `NO_COLOR=1` to disable colour in a terminal, or use `server --json` for JSON logs. Callback state, codes, and provider error values are never included.
+See the [CLI reference](docs/cli.md) for configuration, logging, JSON output, and exit codes. Use `setup` for guided configuration or `setup --defaults --yes` for unattended defaults.
 
-## Register a worktree
+## Use with Aspire
 
-Send `POST /registrations` with an exact HTTP or HTTPS destination:
-
-```json
-{"callbackUrl":"http://127.0.0.1:5017/oauth/callback"}
-```
-
-The response includes `id`, `relayCallbackUrl`, `leaseSeconds`, and `expiresAt`. Construct OAuth state as `<id>.<your-random-state>`. Store and validate that complete state value in the worktree, including normal browser correlation and one-time consumption. ORelay uses only the ID prefix to select a destination.
-
-When the provider redirects to ORelay, it forwards the complete query unchanged, including state, code, errors, repeated fields, and encoded values. Unknown or expired registrations fail without a fallback destination.
-
-| Request | Effect |
-| --- | --- |
-| `POST /registrations` | Create a fresh registration and lease. |
-| `PUT /registrations/{id}/lease` | Renew a live registration; expired IDs return 404. |
-| `DELETE /registrations/{id}` | Deregister; repeated deletion succeeds. |
-| `GET /callback` | Redirect the browser using the ID in state. |
-| `GET /health` | Read the relay identity and health. |
-
-Registrations exist only in memory. The default lease is five minutes. Renew before expiry and deregister on shutdown. Lease expiry removes registrations left by crashed processes. Restarting ORelay loses every registration; affected applications need a fresh registration, and pending OAuth flows must start again.
-
-See the [HTTP and state contract](docs/protocol.md) for request and response fields, state bounds, destination restrictions, and errors.
-
-## Aspire
-
-`ORelay.Aspire.Hosting` is a separate NuGet library used by the consuming AppHost. Start ORelay separately, then connect your application resource:
+Add `ORelay.Aspire.Hosting` to your AppHost. The package is public, but GitHub's NuGet registry still requires a token to restore it. See the [package feed instructions](docs/releases.md#github-packages) for authentication and version selection. Start ORelay separately, then connect an application resource:
 
 ```csharp
 using ORelay.Aspire.Hosting;
@@ -81,28 +79,78 @@ builder.AddProject<Projects.Api>("api")
     .WithORelay(relay, "/oauth/callback", endpointName: "http");
 ```
 
-The AppHost registers before starting the application and injects `ORelay__RegistrationId` and `ORelay__RedirectUri`. It renews the lease even while the application is paused, and deregisters on resource or AppHost shutdown. Each registered resource has one instance; separate worktrees run separate AppHosts.
+The AppHost registers before starting the application and injects `ORelay__RegistrationId` and `ORelay__RedirectUri`. It renews the lease while the application runs or is paused, and deregisters on resource or AppHost shutdown. Separate worktrees run separate AppHosts.
 
-In the Aspire dashboard, open the relay resource to inspect each application's registration status, callback destination, public relay callback, last successful renewal, lease expiry, and renewal interval. Resource relationships link the applications to their relay. The relay's health check summarizes its registrations, while each application's health check reports its own registration. The relay console logs registration, successful renewal, connection failures, registration loss, and cleanup, with the application name on each entry. Callback queries and OAuth values are not included.
+The Aspire dashboard shows registration health, destination, callback URL, lease expiry, and renewal activity. If a registration is lost, it reports degraded health with an explicit restart instruction. It retries a disconnected relay while the lease remains valid.
 
-If a registration is lost, the resource reports degraded health with a restart instruction. Explicitly restart the resource or AppHost to obtain a new ID. ORelay does not restart applications automatically. See [package usage](src/ORelay.Aspire.Hosting/PACKAGE.md) and the [sample with a synthetic OAuth provider](samples/GUIDE.md).
+See [package usage](src/ORelay.Aspire.Hosting/PACKAGE.md) and the [sample with a synthetic OAuth provider](samples/GUIDE.md).
 
-## Shared relay
+## Use the HTTP API
 
-The default listener and allowed destinations are loopback-only. To share a relay, explicitly bind a reachable interface and supply an advertised hostname or URL:
+Send `POST /registrations` with an exact HTTP or HTTPS destination:
+
+```json
+{"callbackUrl":"http://127.0.0.1:5017/oauth/callback"}
+```
+
+The response includes `id`, `relayCallbackUrl`, `leaseSeconds`, and `expiresAt`. Construct OAuth state as `<id>.<your-random-state>`. Store and validate that complete value in the worktree, including browser correlation and one-time consumption. ORelay uses only the ID prefix to select a destination.
+
+| Request | Effect |
+| --- | --- |
+| `POST /registrations` | Create a registration and lease. |
+| `PUT /registrations/{id}/lease` | Renew a live registration; expired IDs return 404. |
+| `DELETE /registrations/{id}` | Deregister; repeated deletion succeeds. |
+| `GET /callback` | Redirect the browser using the ID in state. |
+| `GET /health` | Read relay identity and health. |
+
+Callbacks preserve the complete query, including state, code, errors, repeated fields, and encoded values. Unknown or expired IDs fail without a fallback destination. ORelay stores routing destinations and lease expiry, never callback queries, codes, or tokens. Renew before expiry and deregister on shutdown.
+
+See the [HTTP and state contract](docs/protocol.md) for fields, validation, and errors.
+
+## Update
+
+```text
+orelay update --check
+orelay update
+```
+
+The updater selects the latest stable release for the executable's platform, verifies its checksum and version, and replaces the executable. It preserves configuration and the registration database. It refuses automatic downgrades.
+
+For a running Windows or Linux service, explicitly allow a restart and use the same configuration and service name as the installation:
+
+```text
+orelay --config-file <absolute-config-path> update --restart-service --name <service-name>
+```
+
+A short restart preserves live registrations. A lease that expires during an outage stays expired. The updater checks startup and restores the previous executable if replacement or startup fails. Automatic background installation is planned separately.
+
+## Run as a service
+
+Windows Service and Linux systemd support use the installed executable. Initialize the configuration, then run with the platform's administrative privileges:
+
+```text
+orelay --config-file <absolute-config-path> service install
+orelay --config-file <absolute-config-path> service start
+orelay --config-file <absolute-config-path> service status
+```
+
+Installation does not start the service or enable boot-time startup. macOS supports foreground execution. See [service commands](docs/cli.md#services) for names, accounts, and lifecycle operations.
+
+## Share a relay
+
+The default listener and allowed destinations are loopback-only. To share a relay, explicitly bind a reachable interface and supply its advertised hostname:
 
 ```text
 orelay server --bind 0.0.0.0 --hostname relay.example.test
-orelay server --bind 0.0.0.0 --auto-discovery tailscale
 ```
 
-Tailscale discovery uses the local Tailscale CLI. An explicit public URL or saved hostname takes precedence. For an existing configuration containing `hostname`, use `orelay config clear hostname` when switching to Tailscale discovery. Discovery chooses an address; it does not change firewall rules, application bindings, or provider registrations. Use `doctor` to check the resulting configuration.
+Tailscale discovery is also available through `--auto-discovery tailscale`. A saved hostname takes precedence; clear it with `orelay config clear hostname` when switching to discovery. This does not change firewall rules or provider registrations.
 
-Management authentication is deferred in this version. Every client that can reach the management API can create, renew, or delete registrations. Shared binding also permits remote callback destinations. Choose network access accordingly.
+Management authentication is deferred. Every client that can reach the management API can create, renew, or delete registrations. Shared binding also permits remote callback destinations. Choose network access accordingly.
 
 ## Build and contribute
 
-Install the SDK pinned in `global.json`. From the checkout, these PowerShell scripts work on Windows, Linux, and macOS with PowerShell 7:
+Install the SDK pinned in `global.json` and PowerShell 7. From the checkout:
 
 ```powershell
 ./scripts/build.ps1
@@ -111,6 +159,10 @@ Install the SDK pinned in `global.json`. From the checkout, these PowerShell scr
 ./scripts/publish.ps1 -RuntimeIdentifier win-x64
 ```
 
-Use the matching host and native compiler prerequisites when publishing for another RID. Run a focused test selection with `dotnet test tests/ORelay.Tests --filter FullyQualifiedName~Configuration`. Aspire integration tests require a running, run-owned relay; the sample guide gives the commands.
+Native publishing compiles and statically links the pinned SQLite source. Use the matching host and the compiler prerequisites in the [native build guide](docs/native-platforms.md). Published executables have no .NET or SQLite runtime dependency.
 
-The [v1 tickets](.scratch/orelay-v1/issues/README.md) track delivery and verification. ORelay is licensed under the [MIT license](LICENSE).
+Run focused tests with `dotnet test tests/ORelay.Tests --filter FullyQualifiedName~Configuration`. The [sample guide](samples/GUIDE.md) covers Aspire integration tests. The [release guide](docs/releases.md) explains version tags, downloads, and package publication.
+
+## License
+
+[MIT](LICENSE). SQLite is in the public domain.

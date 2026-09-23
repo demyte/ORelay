@@ -7,7 +7,15 @@ namespace ORelay.Services;
 public sealed record WindowsServiceDefinition(
     string BinaryPathName,
     ServiceState State,
-    int Win32ExitCode = 0);
+    int Win32ExitCode = 0,
+    WindowsServiceStartMode StartMode = WindowsServiceStartMode.Manual);
+
+public enum WindowsServiceStartMode
+{
+    Manual,
+    Automatic,
+    Disabled,
+}
 
 public sealed record WindowsServiceQueryResult(
     bool Succeeded,
@@ -51,6 +59,8 @@ public interface IWindowsServiceBackend
     WindowsServiceActionResult StopService(string serviceName);
 
     WindowsServiceActionResult Delete(string serviceName);
+
+    WindowsServiceActionResult SetStartMode(string serviceName, WindowsServiceStartMode startMode);
 }
 
 /// <summary>Windows service lifecycle and ownership implementation.</summary>
@@ -99,6 +109,8 @@ public sealed class WindowsServiceManager : IPlatformServiceManager
             ServiceOperation.Restart => Restart(request),
             ServiceOperation.Status => Status(request),
             ServiceOperation.Uninstall => Uninstall(request),
+            ServiceOperation.Enable => SetStartMode(request, ServiceOperation.Enable, WindowsServiceStartMode.Automatic),
+            ServiceOperation.Disable => SetStartMode(request, ServiceOperation.Disable, WindowsServiceStartMode.Manual),
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown service operation."),
         };
     }
@@ -187,6 +199,31 @@ public sealed class WindowsServiceManager : IPlatformServiceManager
         }
 
         return ServiceOperationResult.Success(Platform, ServiceOperation.Start, request.ServiceName, ServiceState.Running, true, true, $"Windows service '{request.ServiceName}' is running.");
+    }
+
+    private ServiceOperationResult SetStartMode(ServiceRequest request, ServiceOperation operation, WindowsServiceStartMode desiredMode)
+    {
+        var ownership = QueryOwned(operation, request);
+        if (ownership.Result is not null)
+        {
+            return ownership.Result;
+        }
+
+        var definition = ownership.Definition!;
+        var state = EffectiveState(definition);
+        var action = operation == ServiceOperation.Enable ? "enabled for automatic startup" : "set to manual startup";
+        if (definition.StartMode == desiredMode)
+        {
+            return ServiceOperationResult.Success(Platform, operation, request.ServiceName, state, false, true, $"Windows service '{request.ServiceName}' is already {action}.");
+        }
+
+        var change = _backend.SetStartMode(request.ServiceName, desiredMode);
+        if (!change.Succeeded)
+        {
+            return Failure(operation, request, ToErrorCode(change), change.ErrorMessage!, change.NativeErrorCode, owned: true, state: state);
+        }
+
+        return ServiceOperationResult.Success(Platform, operation, request.ServiceName, state, true, true, $"Windows service '{request.ServiceName}' was {action}.");
     }
 
     private ServiceOperationResult Stop(ServiceRequest request)
@@ -402,9 +439,12 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
     private const int ServiceStart = 0x0010;
     private const int ServiceStop = 0x0020;
     private const int ServiceDelete = 0x00010000;
+    private const int ServiceChangeConfig = 0x0002;
     private const int ServiceAllAccess = 0x000F01FF;
     private const int ServiceWin32OwnProcess = 0x00000010;
     private const int ServiceDemandStart = 0x00000003;
+    private const int ServiceAutoStart = 0x00000002;
+    private const int ServiceNoChange = -1;
     private const int ServiceErrorNormal = 0x00000001;
     private const int ServiceControlStop = 0x00000001;
     private const int ScStatusProcessInfo = 0;
@@ -451,7 +491,7 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
                 }
 
                 return WindowsServiceQueryResult.FoundService(
-                    new WindowsServiceDefinition(config.Definition!.BinaryPathName, status.Definition!.State, status.Definition.Win32ExitCode));
+                    new WindowsServiceDefinition(config.Definition!.BinaryPathName, status.Definition!.State, status.Definition.Win32ExitCode, config.Definition.StartMode));
             }
             finally
             {
@@ -519,6 +559,11 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
     }, ErrorServiceNotActive, "stop");
 
     public WindowsServiceActionResult Delete(string serviceName) => Invoke(serviceName, ServiceDelete, DeleteService, 1072, "remove");
+
+    public WindowsServiceActionResult SetStartMode(string serviceName, WindowsServiceStartMode startMode) =>
+        Invoke(serviceName, ServiceChangeConfig, service => ChangeServiceConfig(
+            service, ServiceNoChange, startMode == WindowsServiceStartMode.Automatic ? ServiceAutoStart : ServiceDemandStart,
+            ServiceNoChange, null, null, IntPtr.Zero, null, null, null, null), -1, "change startup for");
 
     private static WindowsServiceActionResult Invoke(
         string serviceName,
@@ -596,7 +641,12 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
             var binaryPathName = Marshal.PtrToStringUni(native.BinaryPathName);
             return string.IsNullOrWhiteSpace(binaryPathName)
                 ? QueryFailure("The Windows service has no executable command line.")
-                : WindowsServiceQueryResult.FoundService(new WindowsServiceDefinition(binaryPathName, ServiceState.Unknown));
+                : WindowsServiceQueryResult.FoundService(new WindowsServiceDefinition(binaryPathName, ServiceState.Unknown, StartMode: native.StartType switch
+                {
+                    ServiceAutoStart => WindowsServiceStartMode.Automatic,
+                    4 => WindowsServiceStartMode.Disabled,
+                    _ => WindowsServiceStartMode.Manual,
+                }));
         }
         finally
         {
@@ -715,4 +765,9 @@ public sealed class Win32WindowsServiceBackend : IWindowsServiceBackend
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern bool DeleteService(IntPtr service);
+
+    [DllImport("advapi32.dll", EntryPoint = "ChangeServiceConfigW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    private static extern bool ChangeServiceConfig(IntPtr service, int serviceType, int startType, int errorControl,
+        string? binaryPathName, string? loadOrderGroup, IntPtr tagId, string? dependencies,
+        string? serviceStartName, string? password, string? displayName);
 }

@@ -101,6 +101,50 @@ public sealed class SystemdServiceManagerTests
         Assert.DoesNotContain("$$", content, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void BootStartupChangesOnlyForOwnedUnit()
+    {
+        using var fixture = new ServiceFixture();
+        var runner = new FakeSystemdRunner();
+        var manager = new SystemdServiceManager(runner, "systemctl", TimeSpan.FromSeconds(1));
+        Assert.True(manager.Execute(ServiceOperation.Install, fixture.Request).Succeeded);
+
+        var enable = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        var enableAgain = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        var disable = manager.Execute(ServiceOperation.Disable, fixture.Request);
+
+        Assert.True(enable.Succeeded);
+        Assert.True(enable.Changed);
+        Assert.True(enable.Owned);
+        Assert.False(enableAgain.Changed);
+        Assert.True(disable.Succeeded);
+        Assert.True(disable.Changed);
+        Assert.Contains(runner.Commands, command => command.SequenceEqual(new[] { "enable", "orelay-test.service" }));
+        Assert.Contains(runner.Commands, command => command.SequenceEqual(new[] { "disable", "orelay-test.service" }));
+
+        File.WriteAllText(fixture.Request.UnitFilePath, "[Service]\nExecStart=/usr/bin/other\n");
+        var conflict = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        Assert.Equal(ServiceErrorCode.Conflict, conflict.ErrorCode);
+        Assert.Equal(1, runner.Commands.Count(command => command[0] == "enable"));
+    }
+
+    [Fact]
+    public void BootStartupReportsSystemctlPermissionFailure()
+    {
+        using var fixture = new ServiceFixture();
+        var runner = new FakeSystemdRunner();
+        var manager = new SystemdServiceManager(runner, "systemctl", TimeSpan.FromSeconds(1));
+        Assert.True(manager.Execute(ServiceOperation.Install, fixture.Request).Succeeded);
+        runner.EnableError = new ServiceProcessResult(1, string.Empty, "Permission denied");
+
+        var result = manager.Execute(ServiceOperation.Enable, fixture.Request);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ServiceErrorCode.PermissionDenied, result.ErrorCode);
+        Assert.True(result.Owned);
+        Assert.Equal(ServiceState.Stopped, result.State);
+    }
+
     private sealed class ServiceFixture : IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "orelay-systemd-tests", Guid.NewGuid().ToString("N"));
@@ -146,6 +190,10 @@ public sealed class SystemdServiceManagerTests
         private bool _loaded;
         private bool _running;
 
+        private bool _enabled;
+
+        public ServiceProcessResult? EnableError { get; set; }
+
         public List<string[]> Commands { get; } = [];
 
         public ServiceProcessResult Run(string fileName, IReadOnlyList<string> arguments)
@@ -163,7 +211,16 @@ public sealed class SystemdServiceManagerTests
                     _loaded = true;
                     return new ServiceProcessResult(0, string.Empty, string.Empty);
                 case "disable":
+                    _enabled = false;
                     return new ServiceProcessResult(0, string.Empty, string.Empty);
+                case "enable":
+                    if (EnableError is not null) return EnableError;
+                    _enabled = true;
+                    return new ServiceProcessResult(0, string.Empty, string.Empty);
+                case "is-enabled":
+                    return _enabled
+                        ? new ServiceProcessResult(0, "enabled", string.Empty)
+                        : new ServiceProcessResult(1, "disabled", string.Empty);
                 case "start":
                 case "restart":
                     _running = true;

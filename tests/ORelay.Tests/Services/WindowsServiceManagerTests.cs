@@ -134,6 +134,54 @@ public sealed class WindowsServiceManagerTests
         Assert.Equal(0, backend.CreateCalls);
     }
 
+    [Fact]
+    public void StartupModeChangesOnlyForOwnedService()
+    {
+        using var fixture = new ServiceFixture();
+        var backend = new FakeWindowsServiceBackend
+        {
+            Definition = new WindowsServiceDefinition(ServiceCommandLine.BuildWindows(fixture.Request), ServiceState.Stopped),
+        };
+        var manager = new WindowsServiceManager(backend);
+
+        var enable = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        var enableAgain = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        var disable = manager.Execute(ServiceOperation.Disable, fixture.Request);
+
+        Assert.True(enable.Succeeded);
+        Assert.True(enable.Changed);
+        Assert.True(enable.Owned);
+        Assert.True(enableAgain.Succeeded);
+        Assert.False(enableAgain.Changed);
+        Assert.True(disable.Succeeded);
+        Assert.True(disable.Changed);
+        Assert.Equal(new[] { WindowsServiceStartMode.Automatic, WindowsServiceStartMode.Manual }, backend.StartModes);
+
+        backend.Definition = backend.Definition with { BinaryPathName = "other.exe" };
+        var conflict = manager.Execute(ServiceOperation.Enable, fixture.Request);
+        Assert.Equal(ServiceErrorCode.Conflict, conflict.ErrorCode);
+        Assert.Equal(2, backend.StartModes.Count);
+    }
+
+    [Fact]
+    public void StartupModeReportsScmPermissionFailure()
+    {
+        using var fixture = new ServiceFixture();
+        var backend = new FakeWindowsServiceBackend
+        {
+            Definition = new WindowsServiceDefinition(ServiceCommandLine.BuildWindows(fixture.Request), ServiceState.Running),
+            StartModeError = WindowsServiceActionResult.Failure("Access denied", 5),
+        };
+
+        var result = new WindowsServiceManager(backend).Execute(ServiceOperation.Enable, fixture.Request);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ServiceErrorCode.PermissionDenied, result.ErrorCode);
+        Assert.Equal(5, result.NativeErrorCode);
+        Assert.True(result.Owned);
+        Assert.Equal(ServiceState.Running, result.State);
+    }
+
     private sealed class ServiceFixture : IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "orelay-service-tests", Guid.NewGuid().ToString("N"));
@@ -177,6 +225,10 @@ public sealed class WindowsServiceManagerTests
 
         public int DeleteCalls { get; private set; }
 
+        public List<WindowsServiceStartMode> StartModes { get; } = [];
+
+        public WindowsServiceActionResult? StartModeError { get; set; }
+
         public WindowsServiceQueryResult Query(string serviceName) =>
             Definition is null
                 ? WindowsServiceQueryResult.NotFound()
@@ -207,6 +259,18 @@ public sealed class WindowsServiceManagerTests
         {
             DeleteCalls++;
             Definition = null;
+            return WindowsServiceActionResult.Success();
+        }
+
+        public WindowsServiceActionResult SetStartMode(string serviceName, WindowsServiceStartMode startMode)
+        {
+            StartModes.Add(startMode);
+            if (StartModeError is not null)
+            {
+                return StartModeError;
+            }
+
+            Definition = Definition! with { StartMode = startMode };
             return WindowsServiceActionResult.Success();
         }
     }

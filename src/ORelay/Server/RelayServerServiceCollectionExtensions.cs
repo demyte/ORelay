@@ -6,7 +6,7 @@ namespace ORelay.Server;
 public static class RelayServerServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the in-memory registry and expiry sweep. Hosts can map the
+    /// Registers the registry and expiry sweep. Hosts can map the
     /// endpoints with <see cref="RelayServerEndpoints.MapRelayEndpoints"/>.
     /// </summary>
     public static IServiceCollection AddRelayServer(
@@ -22,7 +22,9 @@ public static class RelayServerServiceCollectionExtensions
         services.AddSingleton(sp => new RegistrationStore(
             sp.GetRequiredService<TimeProvider>(),
             options.LeaseDuration,
-            options.MaxRegistrations));
+            options.MaxRegistrations,
+            options.RegistrationDatabasePath,
+            options.AllowsNonLoopbackDestinations));
         services.AddHostedService<RegistrationExpiryService>();
         services.ConfigureHttpJsonOptions(json =>
             json.SerializerOptions.TypeInfoResolverChain.Insert(0, RelayJsonContext.Default));

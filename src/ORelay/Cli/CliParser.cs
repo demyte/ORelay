@@ -151,10 +151,13 @@ public static class CliParser
         return command.ToLowerInvariant() switch
         {
             "init" => ParseInit(arguments, isJson, configFile, settings),
+            "setup" => ParseSetup(arguments, isJson, configFile, settings),
             "config" => ParseConfig(arguments, isJson, configFile, settings, requestedHelp),
             "server" => ParseServer(arguments, isJson, configFile, settings),
             "doctor" => ParseDoctor(arguments, isJson, configFile, settings),
             "service" => ParseService(arguments, isJson, configFile, settings, requestedHelp),
+            "update" => ParseInstallation(arguments, isJson, configFile, settings, install: false),
+            "install" => ParseInstallation(arguments, isJson, configFile, settings, install: true),
             _ => CliParseResult.Failure($"unknown command '{command}'")
         };
     }
@@ -170,6 +173,53 @@ public static class CliParser
             : CliParseResult.Failure("init does not accept positional arguments or command options");
     }
 
+    private static CliParseResult ParseSetup(
+        List<string> arguments, bool isJson, string? configFile, RelaySettingsPatch? settings)
+    {
+        var flags = new HashSet<string>(StringComparer.Ordinal);
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument is "--defaults" or "--yes" or "--if-needed" or "--start" or "--enable-startup" or "--add-to-path" or "--skip-path")
+            {
+                if (!flags.Add(argument)) return CliParseResult.Failure($"{argument} may be specified only once");
+                continue;
+            }
+
+            var matched = false;
+            foreach (var name in new[] { "--access", "--mode", "--name" })
+            {
+                if (TryReadNamedOption(arguments, ref index, name, out var value, out var error))
+                {
+                    if (!values.TryAdd(name, value!)) return CliParseResult.Failure($"{name} may be specified only once");
+                    matched = true;
+                    break;
+                }
+                if (error is not null) return CliParseResult.Failure(error);
+            }
+            if (!matched) return CliParseResult.Failure($"unknown setup argument '{argument}'");
+        }
+
+        values.TryGetValue("--access", out var access);
+        values.TryGetValue("--mode", out var mode);
+        values.TryGetValue("--name", out var serviceName);
+        if (access is not (null or "local" or "lan" or "tailscale"))
+            return CliParseResult.Failure("--access must be local, lan, or tailscale");
+        if (mode is not (null or "foreground" or "service"))
+            return CliParseResult.Failure("--mode must be foreground or service");
+        if (flags.Contains("--defaults") && (settings is not null || access is not null || mode is not null || flags.Contains("--start") || flags.Contains("--enable-startup")))
+            return CliParseResult.Failure("--defaults cannot be combined with custom settings or service actions");
+        if (flags.Contains("--yes") && mode != "service" && (flags.Contains("--start") || flags.Contains("--enable-startup")))
+            return CliParseResult.Failure("--start and --enable-startup require --mode service");
+        if (flags.Contains("--add-to-path") && flags.Contains("--skip-path"))
+            return CliParseResult.Failure("--add-to-path and --skip-path cannot be combined");
+        return CliParseResult.Success(new CliOptions(CliCommand.Setup, isJson, configFile, SettingsPatch: settings,
+            Setup: new SetupCommandOptions(flags.Contains("--defaults"), flags.Contains("--yes"), flags.Contains("--if-needed"),
+                access, mode, serviceName, flags.Contains("--start"), flags.Contains("--enable-startup"),
+                flags.Contains("--add-to-path"), flags.Contains("--skip-path"))));
+    }
+
     private static CliParseResult ParseConfig(
         List<string> arguments,
         bool isJson,
@@ -179,7 +229,7 @@ public static class CliParser
     {
         if (settings is not null)
         {
-            return CliParseResult.Failure("setting options can only be used with init or server");
+            return CliParseResult.Failure("setting options can only be used with init, setup, or server");
         }
 
         if (arguments.Count < 2)
@@ -265,7 +315,7 @@ public static class CliParser
     {
         if (settings is not null)
         {
-            return CliParseResult.Failure("setting options can only be used with init or server");
+            return CliParseResult.Failure("setting options can only be used with init, setup, or server");
         }
 
         var fix = false;
@@ -318,17 +368,17 @@ public static class CliParser
     {
         if (settings is not null)
         {
-            return CliParseResult.Failure("setting options can only be used with init or server");
+            return CliParseResult.Failure("setting options can only be used with init, setup, or server");
         }
 
         if (arguments.Count < 2)
         {
             return requestedHelp && arguments.Count == 1
                 ? CliParseResult.Success(new CliOptions(CliCommand.Service, isJson, configFile))
-                : CliParseResult.Failure("service requires install, start, stop, restart, status, or uninstall");
+                : CliParseResult.Failure("service requires install, start, stop, restart, status, uninstall, enable, or disable");
         }
 
-        if (!Enum.TryParse<ServiceAction>(arguments[1], ignoreCase: true, out var action))
+        if (!Enum.TryParse<ServiceAction>(arguments[1], ignoreCase: true, out var action) || !Enum.IsDefined(action) || int.TryParse(arguments[1], out _))
         {
             return CliParseResult.Failure($"unknown service action '{arguments[1]}'");
         }
@@ -360,6 +410,71 @@ public static class CliParser
             isJson,
             configFile,
             Service: new ServiceCommandOptions(action, serviceName)));
+    }
+
+    private static CliParseResult ParseInstallation(
+        List<string> arguments,
+        bool isJson,
+        string? configFile,
+        RelaySettingsPatch? settings,
+        bool install)
+    {
+        if (settings is not null)
+        {
+            return CliParseResult.Failure("setting options can only be used with init, setup, or server");
+        }
+
+        var check = false;
+        var restartService = false;
+        string? name = null;
+        string? directory = null;
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (!install && argument == "--check")
+            {
+                if (check) return CliParseResult.Failure("--check may be specified only once");
+                check = true;
+                continue;
+            }
+
+            if (argument == "--restart-service")
+            {
+                if (restartService) return CliParseResult.Failure("--restart-service may be specified only once");
+                restartService = true;
+                continue;
+            }
+
+            if (TryReadNamedOption(arguments, ref index, "--name", out var value, out var error))
+            {
+                if (name is not null) return CliParseResult.Failure("--name may be specified only once");
+                name = value;
+                continue;
+            }
+            if (error is not null) return CliParseResult.Failure(error);
+
+            if (install)
+            {
+                if (TryReadNamedOption(arguments, ref index, "--install-dir", out value, out error))
+                {
+                    if (directory is not null) return CliParseResult.Failure("--install-dir may be specified only once");
+                    directory = value;
+                    continue;
+                }
+                if (error is not null) return CliParseResult.Failure(error);
+            }
+
+            return CliParseResult.Failure($"unknown {(install ? "install" : "update")} argument '{argument}'");
+        }
+
+        if (check && restartService)
+            return CliParseResult.Failure("--check cannot be combined with --restart-service");
+
+        return install
+            ? CliParseResult.Success(new CliOptions(CliCommand.Install, isJson, configFile,
+                Install: new InstallCommandOptions(directory, restartService, name)))
+            : CliParseResult.Success(new CliOptions(CliCommand.Update, isJson, configFile,
+                Update: new UpdateCommandOptions(check, restartService, name)));
     }
 
     private static bool TryReadNamedOption(

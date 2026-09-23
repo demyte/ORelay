@@ -17,6 +17,8 @@ public enum ServiceOperation
     Restart,
     Status,
     Uninstall,
+    Enable,
+    Disable,
 }
 
 /// <summary>The state reported by an operating system service manager.</summary>

@@ -40,7 +40,7 @@ $env:ORELAY_TEST_SERVER = 'http://127.0.0.1:19387'
 dotnet test tests/ORelay.Aspire.Hosting.Tests --filter Category=AspireIntegration
 ```
 
-Set `ORELAY_TEST_RELAY_BINARY` to the absolute native executable when running the real-relay restart case. The repository's existing package proof is under `.artifacts/verification/aspire-package/`. This skill does not count that proof as a new run unless the commands are executed again.
+Set `ORELAY_TEST_RELAY_BINARY` to the absolute native executable when running `RealRelayProcessRestartKeepsPendingFlowAndAppHostRegistration`. This test starts its own relay and real AppHost, starts an OAuth flow, kills and restarts the relay, then completes the pending flow with the same registration ID. It also checks that the SQLite file exists. Its explicit `127.0.0.1` hostname keeps the synthetic provider's callback allowlist aligned with the relay address. The repository's existing package proof is under `.artifacts/verification/aspire-package/`. This skill does not count that proof as a new run unless the commands are executed again.
 
 The two-AppHost test also follows a callback with a valid routing ID and tampered opaque state through the relay. The worktree must return `400 invalid_state`, then the original cookie-bound flow must still complete successfully.
 
@@ -52,6 +52,6 @@ To prove orphan cleanup after a crash, launch the sample AppHost as a separate r
 
 - DCP must be installed and usable for the integration path.
 - The relay and AppHost need separate run-owned ports and configs.
-- A lost registration requires an explicit restart. The sample does not change a running process's environment.
+- A lost or expired registration requires an explicit restart. A brief relay restart preserves a live registration through SQLite, and AppHost renewal resumes before its deadline. The sample does not change a running process's environment.
 - A project reference and a packed local NuGet package test different dependency paths. Record which one ran.
 - A Tailscale DNS result requires name resolution from the browser's network position. Use an explicit reachable URL or IP hostname override when MagicDNS is unavailable.

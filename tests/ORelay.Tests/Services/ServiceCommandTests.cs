@@ -54,5 +54,7 @@ public sealed class ServiceCommandTests
         public WindowsServiceActionResult StopService(string serviceName) => WindowsServiceActionResult.Success();
 
         public WindowsServiceActionResult Delete(string serviceName) => WindowsServiceActionResult.Success();
+
+        public WindowsServiceActionResult SetStartMode(string serviceName, WindowsServiceStartMode startMode) => WindowsServiceActionResult.Success();
     }
 }

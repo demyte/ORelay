@@ -67,6 +67,16 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Check Windows bootstrap with PowerShell 5.1
+        if: startsWith(matrix.rid, 'win-')
+        shell: powershell
+        run: ./scripts/test-bootstrap.ps1
+
+      - name: Check Unix bootstrap
+        if: ${{ !startsWith(matrix.rid, 'win-') }}
+        shell: bash
+        run: sh scripts/test-bootstrap.sh
+
       - name: Prepare run-owned paths
         shell: pwsh
         env:
@@ -119,6 +129,14 @@ jobs:
             if ([string]::IsNullOrWhiteSpace($vsPath)) { throw 'Visual Studio C++ build tools are required for Windows Native AOT publishing.' }
             $vsPath.Trim()
           }
+
+      - name: Build pinned SQLite static library
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+        run: |
+          pwsh -NoProfile -File scripts/build-sqlite.ps1 -RuntimeIdentifier $env:RID
+          if ($LASTEXITCODE -ne 0) { throw 'SQLite native build failed.' }
 
       - name: Restore
         shell: pwsh
@@ -174,6 +192,81 @@ jobs:
             -HideRuntimeForProof
           if ($LASTEXITCODE -ne 0) { throw "Native smoke failed with exit code $LASTEXITCODE." }
 
+      - name: Exercise native setup command
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/setup-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID
+          if ($LASTEXITCODE -ne 0) { throw "Setup smoke failed with exit code $LASTEXITCODE." }
+
+      - name: Exercise native user PATH setup
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arguments = @(
+            '-NoProfile', '-File', '.github/workflows/user-path-smoke.ps1',
+            '-ExecutablePath', (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME),
+            '-RunRoot', $env:RUN_ROOT,
+            '-Rid', $env:RID
+          )
+          if ($env:RID.StartsWith('win-')) { $arguments += '-AllowWindowsUserPath' }
+          & pwsh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "User PATH smoke failed with exit code $LASTEXITCODE." }
+
+      - name: Install standalone executable
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME
+          $directory = Join-Path $env:RUN_ROOT 'installed cli'
+          $target = Join-Path $directory $env:EXECUTABLE_NAME
+          $output = @(& $source install --install-dir $directory --name "orelay-install-$env:RID" --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Native installation failed.' }
+          $output | Set-Content -LiteralPath (Join-Path $env:RUN_ROOT 'evidence/install.json')
+          $result = ($output -join "`n") | ConvertFrom-Json
+          if (-not $result.succeeded -or -not $result.changed) { throw 'Native installation did not copy the executable.' }
+          if ((Get-FileHash $source).Hash -ne (Get-FileHash $target).Hash) { throw 'Installed executable differs from its source.' }
+          $repeat = @(& $source install --install-dir $directory --name "orelay-install-$env:RID" --json)
+          if ($LASTEXITCODE -ne 0) { throw 'Repeated native installation failed.' }
+          $repeat | Set-Content -LiteralPath (Join-Path $env:RUN_ROOT 'evidence/install-repeat.json')
+          if ((($repeat -join "`n") | ConvertFrom-Json).changed) { throw 'Repeated native installation should make no change.' }
+
+      - name: Prove installer refuses unrelated existing executable
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/install-safety-smoke.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -RunRoot $env:RUN_ROOT `
+            -Rid $env:RID
+          if ($LASTEXITCODE -ne 0) { throw "Installer safety proof failed with exit code $LASTEXITCODE." }
+
+      - name: Exercise persistent registrations using installed executable
+        shell: pwsh
+        env:
+          RID: ${{ matrix.rid }}
+          EXECUTABLE_NAME: ${{ matrix.executable }}
+        run: |
+          pwsh -NoProfile -File .agents/skills/verify-orelay/scripts/verify.ps1 `
+            -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'installed cli') $env:EXECUTABLE_NAME) `
+            -RuntimeIdentifier $env:RID -RunId "native-persistence-$env:RID"
+          if ($LASTEXITCODE -ne 0) { throw 'Persistent registration verification failed.' }
+
       - name: Assert native CLI version identity
         shell: pwsh
         env:
@@ -216,8 +309,15 @@ jobs:
           EXECUTABLE_NAME: ${{ matrix.executable }}
         run: |
           $ErrorActionPreference = 'Stop'
+          pwsh -NoProfile -File .github/workflows/build-service-fixtures.ps1 `
+            -RunRoot $env:RUN_ROOT -Rid $env:RID -ExecutableName $env:EXECUTABLE_NAME `
+            -ProductionExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME)
+          if ($LASTEXITCODE -ne 0) { throw "Service fixture build failed with exit code $LASTEXITCODE." }
           pwsh -NoProfile -File .github/workflows/service-smoke.ps1 `
             -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT publish) $env:EXECUTABLE_NAME) `
+            -PreviousExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/previous') $env:EXECUTABLE_NAME) `
+            -NextExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/next') $env:EXECUTABLE_NAME) `
+            -FailingExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'service-fixtures/failing') $env:EXECUTABLE_NAME) `
             -RunRoot $env:RUN_ROOT `
             -Rid $env:RID `
             -RequireServiceProof
@@ -252,7 +352,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: orelay-${{ matrix.rid }}-evidence
-          path: ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/evidence
+          path: |
+            ${{ runner.temp }}/orelay-native-${{ matrix.rid }}-*/evidence
+            .artifacts/verification/native-persistence-${{ matrix.rid }}
           if-no-files-found: warn
 
       - name: Upload native artifact

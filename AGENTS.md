@@ -4,7 +4,7 @@ ORelay is a local-development OAuth 2 authorization callback relay for delegated
 
 Load `C:\Users\james\.agents\skills\unslop\SKILL.md` before writing or revising project prose, and apply its plain-language guidance.
 
-Treat the relay core, Aspire hosting integration, and operating-system packaging as separate concerns. Do not add a database or token store for the in-memory registration design. Default to a local-only listener and loopback callback destinations. Reject expired or unknown registration IDs without choosing a fallback destination.
+Treat the relay core, Aspire hosting integration, and operating-system packaging as separate concerns. James authorized SQLite registration persistence and a single native executable per platform. Persist only routing IDs, callback destinations, and absolute lease expiries. Commit mutations before acknowledging them, preserve live registrations across restarts, and never extend leases merely because the relay restarted. Keep OAuth codes, callback queries, and tokens out of the database. Default to a local-only listener and loopback callback destinations. Reject expired or unknown registration IDs without choosing a fallback destination.
 
 Keep proposed behavior marked as planned until implementation and verification establish it. When a relay loses registrations, the consuming application must be explicitly restarted to receive a fresh registration ID; do not add automatic restarts or a dynamic application runtime package. Shared-relay authentication is deferred by James. Do not implement API keys, management secrets, or an authentication requirement in this version. Keep explicit binding and URL validation, and describe the actual trust model in user documentation.
 

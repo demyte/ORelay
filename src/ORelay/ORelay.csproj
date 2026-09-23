@@ -11,10 +11,25 @@
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
     <IsAotCompatible>true</IsAotCompatible>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ORelay.Tests" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Systemd" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' != '' and '$(PublishAot)' == 'true'">
+    <DirectPInvoke Include="e_sqlite3" />
+    <NativeLibrary Include="$(MSBuildProjectDirectory)/../../artifacts/native/$(RuntimeIdentifier)/e_sqlite3.lib" Condition="$(RuntimeIdentifier.StartsWith('win'))" />
+    <NativeLibrary Include="$(MSBuildProjectDirectory)/../../artifacts/native/$(RuntimeIdentifier)/libe_sqlite3.a" Condition="!$(RuntimeIdentifier.StartsWith('win'))" />
+  </ItemGroup>
+
+  <Target Name="RemoveDynamicallyLinkedSqlite" AfterTargets="Publish" Condition="'$(PublishAot)' == 'true'">
+    <Delete Files="$(PublishDir)e_sqlite3.dll" Condition="Exists('$(PublishDir)e_sqlite3.dll')" />
+    <Delete Files="$(PublishDir)libe_sqlite3.so" Condition="Exists('$(PublishDir)libe_sqlite3.so')" />
+    <Delete Files="$(PublishDir)libe_sqlite3.dylib" Condition="Exists('$(PublishDir)libe_sqlite3.dylib')" />
+  </Target>
 </Project>

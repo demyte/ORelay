@@ -3,11 +3,11 @@ using System.Security.Cryptography;
 namespace ORelay.Server;
 
 /// <summary>
-/// In-memory registry for live callback destinations. Registry IDs are opaque
+/// Registry for live callback destinations. Registry IDs are opaque
 /// routing identifiers. This version has no authentication or per-registration
 /// management secret, so a later access policy can be added at the HTTP edge.
 /// </summary>
-public sealed class RegistrationStore
+public sealed class RegistrationStore : IDisposable
 {
     public const int RegistrationIdBytes = 32;
     public const int MaxStateLength = 4096;
@@ -17,15 +17,20 @@ public sealed class RegistrationStore
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _leaseDuration;
     private readonly int _maxRegistrations;
+    private readonly SqliteRegistrationDatabase? _database;
+    private readonly bool _allowNonLoopbackDestinations;
 
     public RegistrationStore(
         TimeProvider? timeProvider = null,
         TimeSpan? leaseDuration = null,
-        int maxRegistrations = RelayServerOptions.DefaultMaxRegistrations)
+        int maxRegistrations = RelayServerOptions.DefaultMaxRegistrations,
+        string? databasePath = null,
+        bool allowNonLoopbackDestinations = false)
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
         _leaseDuration = leaseDuration ?? TimeSpan.FromSeconds(RelayServerOptions.DefaultLeaseSeconds);
         _maxRegistrations = maxRegistrations;
+        _allowNonLoopbackDestinations = allowNonLoopbackDestinations;
 
         if (_leaseDuration <= TimeSpan.Zero || _leaseDuration > TimeSpan.FromDays(1))
         {
@@ -36,6 +41,34 @@ public sealed class RegistrationStore
         {
             throw new ArgumentOutOfRangeException(nameof(maxRegistrations), "The registry capacity must be greater than zero.");
         }
+
+        if (databasePath is not null)
+        {
+            _database = new SqliteRegistrationDatabase(databasePath);
+            try
+            {
+                lock (_gate)
+                {
+                    _database.InTransaction(() =>
+                    {
+                        _database.DeleteExpired(_timeProvider.GetUtcNow().UtcTicks);
+                        foreach (var persisted in _database.ReadAll())
+                        {
+                            if (!IsValidRegistrationId(persisted.Id) ||
+                                !CallbackDestination.TryValidate(persisted.CallbackUrl, _allowNonLoopbackDestinations, out _, out _))
+                            {
+                                _database.Delete(persisted.Id);
+                            }
+                        }
+                    });
+                }
+            }
+            catch
+            {
+                _database.Dispose();
+                throw;
+            }
+        }
     }
 
     public int Count
@@ -44,8 +77,9 @@ public sealed class RegistrationStore
         {
             lock (_gate)
             {
-                RemoveExpiredLocked(_timeProvider.GetUtcNow());
-                return _entries.Count;
+                var now = _timeProvider.GetUtcNow();
+                RemoveExpiredLocked(now);
+                return _database?.Count(now.UtcTicks) ?? _entries.Count;
             }
         }
     }
@@ -57,7 +91,9 @@ public sealed class RegistrationStore
         bool allowNonLoopback,
         string relayCallbackUrl = "")
     {
-        if (!CallbackDestination.TryValidate(callbackUrl, allowNonLoopback, out _, out var errorCode))
+        // Per-call policy may narrow the durable store policy, but never widen it.
+        var effectiveAllowNonLoopback = allowNonLoopback && (_database is null || _allowNonLoopbackDestinations);
+        if (!CallbackDestination.TryValidate(callbackUrl, effectiveAllowNonLoopback, out _, out var errorCode))
         {
             return RegistrationOperationResult.Invalid(errorCode);
         }
@@ -66,14 +102,24 @@ public sealed class RegistrationStore
         {
             var now = _timeProvider.GetUtcNow();
             RemoveExpiredLocked(now);
-            if (_entries.Count >= _maxRegistrations)
+            if (_database is null && _entries.Count >= _maxRegistrations)
             {
                 return RegistrationOperationResult.Invalid("capacity_exceeded");
             }
 
             var id = NewId();
             var entry = new Entry(id, callbackUrl, now + _leaseDuration);
-            _entries.Add(id, entry);
+            if (_database is null)
+            {
+                _entries.Add(id, entry);
+            }
+            else
+            {
+                if (!_database.TryInsert(id, callbackUrl, now.UtcTicks, entry.ExpiresAt.UtcTicks, _maxRegistrations))
+                {
+                    return RegistrationOperationResult.Invalid("capacity_exceeded");
+                }
+            }
             return RegistrationOperationResult.Success(ToResponse(entry, relayCallbackUrl));
         }
     }
@@ -89,6 +135,23 @@ public sealed class RegistrationStore
         {
             var now = _timeProvider.GetUtcNow();
             RemoveExpiredLocked(now);
+            if (_database is not null)
+            {
+                var persisted = _database.Get(id, now.UtcTicks);
+                if (persisted is null ||
+                    !CallbackDestination.TryValidate(persisted.CallbackUrl, _allowNonLoopbackDestinations, out _, out _))
+                {
+                    return RegistrationOperationResult.NotFound();
+                }
+
+                var expiry = now + _leaseDuration;
+                if (!_database.Renew(id, now.UtcTicks, expiry.UtcTicks))
+                {
+                    return RegistrationOperationResult.NotFound();
+                }
+                return RegistrationOperationResult.Success(ToResponse(new Entry(id, persisted.CallbackUrl, expiry), relayCallbackUrl));
+            }
+
             if (!_entries.TryGetValue(id, out var entry))
             {
                 return RegistrationOperationResult.NotFound();
@@ -110,7 +173,7 @@ public sealed class RegistrationStore
         lock (_gate)
         {
             RemoveExpiredLocked(_timeProvider.GetUtcNow());
-            return _entries.Remove(id);
+            return _database?.Delete(id) ?? _entries.Remove(id);
         }
     }
 
@@ -126,6 +189,18 @@ public sealed class RegistrationStore
         {
             var now = _timeProvider.GetUtcNow();
             RemoveExpiredLocked(now);
+            if (_database is not null)
+            {
+                var persisted = _database.Get(id, now.UtcTicks);
+                if (persisted is null ||
+                    !CallbackDestination.TryValidate(persisted.CallbackUrl, _allowNonLoopbackDestinations, out _, out _))
+                {
+                    return false;
+                }
+                registration = persisted;
+                return true;
+            }
+
             if (!_entries.TryGetValue(id, out var entry))
             {
                 return false;
@@ -144,6 +219,8 @@ public sealed class RegistrationStore
             return RemoveExpiredLocked(_timeProvider.GetUtcNow());
         }
     }
+
+    public void Dispose() => _database?.Dispose();
 
     public static bool IsValidRegistrationId(string? id) =>
         !string.IsNullOrEmpty(id) && id.Length is >= 32 and <= 128 &&
@@ -184,6 +261,11 @@ public sealed class RegistrationStore
 
     private int RemoveExpiredLocked(DateTimeOffset now)
     {
+        if (_database is not null)
+        {
+            return _database.DeleteExpired(now.UtcTicks);
+        }
+
         var removed = 0;
         foreach (var pair in _entries.ToArray())
         {

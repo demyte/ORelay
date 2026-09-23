@@ -169,7 +169,8 @@ foreach ($mode in @('default', 'json')) {
     finally {
         if ($null -ne $client) { $client.Dispose() }
         Stop-OwnedProcess $process
-        foreach ($ownedFile in @($configPath, "$configPath.lock")) {
+        $databasePath = [System.IO.Path]::ChangeExtension($configPath, 'registrations.db')
+        foreach ($ownedFile in @($configPath, "$configPath.lock", $databasePath, "$databasePath-journal")) {
             if (Test-Path -LiteralPath $ownedFile) { Remove-Item -LiteralPath $ownedFile }
         }
         Remove-Item -LiteralPath $workRoot

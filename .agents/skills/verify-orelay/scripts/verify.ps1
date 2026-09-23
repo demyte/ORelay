@@ -618,6 +618,99 @@ try {
     })
 
     Stop-OwnedServer -Entry $relayServer
+
+    # Use a separate, longer lease so process startup does not decide this result.
+    $persistenceConfig = Join-Path $script:ScratchRoot 'persistence.json'
+    $isolatedConfig = Join-Path $script:ScratchRoot 'isolated.json'
+    $persistencePort = Get-FreePort
+    $isolatedPort = Get-FreePort
+    $persistenceBase = "http://127.0.0.1:$persistencePort"
+    $isolatedBase = "http://127.0.0.1:$isolatedPort"
+    $databasePath = [System.IO.Path]::ChangeExtension($persistenceConfig, 'registrations.db')
+    [void](Invoke-Native -Arguments @('--config-file', $persistenceConfig, '--port', [string]$persistencePort, '--lease-seconds', '30', 'init') -EvidenceName 'persistence-init')
+    [void](Invoke-Native -Arguments @('--config-file', $isolatedConfig, '--port', [string]$isolatedPort, '--lease-seconds', '30', 'init') -EvidenceName 'isolation-init')
+    $persistentServer = Start-OwnedServer -ConfigPath $persistenceConfig -Port $persistencePort -EvidencePrefix 'server-persistence-first'
+    [void](Wait-ForHealth -Client $http -Url "$persistenceBase/health" -Process $persistentServer.Process)
+    $persistent = Get-Registration -Client $http -RelayBase $persistenceBase -CallbackUrl $callbackUrlA
+    $persistentQuery = "state=$($persistent.id).restart&code=synthetic-persistence-code"
+    $beforeCrash = Get-CallbackResponse -Client $http -Url "$persistenceBase/callback?$persistentQuery"
+    Assert-Equal $beforeCrash.StatusCode 302 'Registration did not route before relay termination.'
+    Assert-Equal $beforeCrash.Location "$($callbackUrlA)?$persistentQuery" 'Initial persistent callback location changed.'
+    Assert-True (Test-Path -LiteralPath $databasePath -PathType Leaf) 'Register did not create the config-specific database.'
+    Stop-OwnedServer -Entry $persistentServer
+    $databaseBytes = [System.IO.File]::ReadAllBytes($databasePath)
+    $databaseText = [System.Text.Encoding]::UTF8.GetString($databaseBytes)
+    Assert-True (-not $databaseText.Contains('synthetic-persistence-code')) 'The database contains a callback authorization code.'
+    $persistentServer = Start-OwnedServer -ConfigPath $persistenceConfig -Port $persistencePort -EvidencePrefix 'server-persistence-restart'
+    [void](Wait-ForHealth -Client $http -Url "$persistenceBase/health" -Process $persistentServer.Process)
+    $afterCrash = Get-CallbackResponse -Client $http -Url "$persistenceBase/callback?$persistentQuery"
+    Assert-Equal $afterCrash.StatusCode 302 'Live registration was lost across relay termination.'
+    Assert-Equal $afterCrash.Location $beforeCrash.Location 'Restart changed the callback destination or raw query.'
+    $renewPersistent = $http.PutAsync("$persistenceBase/registrations/$($persistent.id)/lease", $null).GetAwaiter().GetResult()
+    Assert-Equal ([int]$renewPersistent.StatusCode) 200 'Persisted registration could not be renewed.'
+    $renewPersistent.Dispose()
+    Stop-OwnedServer -Entry $persistentServer
+    $persistentServer = Start-OwnedServer -ConfigPath $persistenceConfig -Port $persistencePort -EvidencePrefix 'server-persistence-renewed'
+    [void](Wait-ForHealth -Client $http -Url "$persistenceBase/health" -Process $persistentServer.Process)
+    $afterRenewRestart = Get-CallbackResponse -Client $http -Url "$persistenceBase/callback?$persistentQuery"
+    Assert-Equal $afterRenewRestart.StatusCode 302 'Renewal was lost across relay termination.'
+    Assert-Equal $afterRenewRestart.Location $beforeCrash.Location 'Renewal changed callback routing.'
+
+    $isolatedServer = Start-OwnedServer -ConfigPath $isolatedConfig -Port $isolatedPort -EvidencePrefix 'server-isolated'
+    [void](Wait-ForHealth -Client $http -Url "$isolatedBase/health" -Process $isolatedServer.Process)
+    $isolatedCallback = Get-CallbackResponse -Client $http -Url "$isolatedBase/callback?$persistentQuery"
+    Assert-Equal $isolatedCallback.StatusCode 404 'A second config read another config database.'
+    Stop-OwnedServer -Entry $isolatedServer
+    $deletePersistent = $http.DeleteAsync("$persistenceBase/registrations/$($persistent.id)").GetAwaiter().GetResult()
+    Assert-Equal ([int]$deletePersistent.StatusCode) 204 'Persisted registration deletion failed.'
+    $deletePersistent.Dispose()
+    Stop-OwnedServer -Entry $persistentServer
+    $persistentServer = Start-OwnedServer -ConfigPath $persistenceConfig -Port $persistencePort -EvidencePrefix 'server-persistence-deleted'
+    [void](Wait-ForHealth -Client $http -Url "$persistenceBase/health" -Process $persistentServer.Process)
+    $afterDeleteRestart = Get-CallbackResponse -Client $http -Url "$persistenceBase/callback?$persistentQuery"
+    Assert-Equal $afterDeleteRestart.StatusCode 404 'Deleted registration returned after restart.'
+    Stop-OwnedServer -Entry $persistentServer
+    Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'persistence-restarts.json') -Value ([ordered]@{
+        databasePath = $databasePath
+        databaseSha256 = (Get-FileHash -LiteralPath $databasePath -Algorithm SHA256).Hash
+        registrationId = $persistent.id
+        initialStatus = $beforeCrash.StatusCode
+        initialLocation = $beforeCrash.Location
+        afterRestartStatus = $afterCrash.StatusCode
+        afterRestartLocation = $afterCrash.Location
+        renewalStatus = 200
+        afterRenewalRestartStatus = $afterRenewRestart.StatusCode
+        isolatedConfigStatus = $isolatedCallback.StatusCode
+        afterDeleteRestartStatus = $afterDeleteRestart.StatusCode
+        containsSyntheticCode = $false
+    })
+
+    # Expiry is absolute: time spent with the relay stopped counts against the lease.
+    $expiryConfig = Join-Path $script:ScratchRoot 'downtime-expiry.json'
+    $expiryPort = Get-FreePort
+    $expiryBase = "http://127.0.0.1:$expiryPort"
+    [void](Invoke-Native -Arguments @('--config-file', $expiryConfig, '--port', [string]$expiryPort, '--lease-seconds', '2', 'init') -EvidenceName 'downtime-expiry-init')
+    $expiryServer = Start-OwnedServer -ConfigPath $expiryConfig -Port $expiryPort -EvidencePrefix 'server-expiry-before-downtime'
+    [void](Wait-ForHealth -Client $http -Url "$expiryBase/health" -Process $expiryServer.Process)
+    $expiring = Get-Registration -Client $http -RelayBase $expiryBase -CallbackUrl $callbackUrlB
+    Stop-OwnedServer -Entry $expiryServer
+    Start-Sleep -Milliseconds 2400
+    $expiryServer = Start-OwnedServer -ConfigPath $expiryConfig -Port $expiryPort -EvidencePrefix 'server-expiry-after-downtime'
+    [void](Wait-ForHealth -Client $http -Url "$expiryBase/health" -Process $expiryServer.Process)
+    $expiredDuringDowntime = Get-CallbackResponse -Client $http -Url "$expiryBase/callback?state=$($expiring.id).downtime&code=synthetic"
+    Assert-Equal $expiredDuringDowntime.StatusCode 404 'Relay restart revived an expired registration.'
+    $expiredRenewal = $http.PutAsync("$expiryBase/registrations/$($expiring.id)/lease", $null).GetAwaiter().GetResult()
+    Assert-Equal ([int]$expiredRenewal.StatusCode) 404 'An expired registration renewed after downtime.'
+    $expiredRenewal.Dispose()
+    Stop-OwnedServer -Entry $expiryServer
+    Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'persistence-downtime-expiry.json') -Value ([ordered]@{
+        registrationId = $expiring.id
+        leaseSeconds = 2
+        downtimeMilliseconds = 2400
+        callbackStatus = $expiredDuringDowntime.StatusCode
+        renewalStatus = 404
+    })
+
     $missingDoctor = Invoke-Native -Arguments @('--config-file', $missingDoctorConfig, 'doctor', '--json') -EvidenceName 'doctor-readonly-missing' -ExpectedExitCode 1
     Assert-True (-not (Test-Path -LiteralPath $missingDoctorConfig)) 'Read-only doctor created a missing configuration file.'
     $completed = $true

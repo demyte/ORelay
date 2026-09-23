@@ -35,11 +35,19 @@ Use **Re-run failed jobs** to reuse the verified artifacts after a publication f
 
 Ordinary pushes to `main` and pull requests only produce build artifacts. They never publish a package or release. Setting up this workflow does not create the first tag.
 
+## Bootstrap and self-update releases
+
+The root `install.ps1` and `install.sh` scripts select the platform archive and its checksum from the latest stable release, then invoke the downloaded executable's `install` command. The selected release must include that command; versions through `v0.1.2` predate it. Keep the archive naming contract `orelay-<version>-<rid>.zip` or `.tar.gz`, with a matching `.sha256` file.
+
+`orelay update` uses the same release assets. It excludes drafts and prereleases and refuses automatic downgrades. Native artifacts contain SQLite linked into the executable. Keep configuration and the registration database outside executable replacement, and retain database compatibility with the previous binary so rollback can restart it.
+
+Releasing these changes still requires an explicitly authorized version tag. Adding bootstrap scripts or updating README examples does not publish a release.
+
 ## GitHub Packages
 
 The feed is `https://nuget.pkg.github.com/demyte/index.json`. The package is associated with `demyte/ORelay` through its repository metadata. The publish job receives `packages: write` and `contents: write`; other jobs have read-only repository access. It uses the workflow's `GITHUB_TOKEN`, so no publishing PAT is required.
 
-The repository is private. Publishing does not change repository or package visibility. To consume the package locally, use a GitHub personal access token, classic, with `read:packages` and access to the package. Keep credentials in your user-level NuGet configuration or environment, outside the repository. GitHub's [NuGet registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry) describes authentication and package access.
+The repository and `ORelay.Aspire.Hosting` package are public. GitHub's NuGet registry still requires authentication to install public packages. To consume the package locally, use a GitHub personal access token, classic, with `read:packages`. Keep credentials in your user-level NuGet configuration or environment, outside the repository. GitHub's [NuGet registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-nuget-registry#authenticating-to-github-packages) describes this requirement. Native archives and the `.nupkg` attached to a public GitHub release can be downloaded without credentials.
 
 For a consuming repository, add a source without credentials:
 
