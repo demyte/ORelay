@@ -30,8 +30,8 @@ public sealed class RelayConfigurationStoreTests
               "autoDiscovery": "none",
               "leaseSeconds": 300,
               "maxRegistrations": 1000,
-              "autoUpdate": false,
-              "autoUpdateIntervalSeconds": 86400
+              "autoUpdate": true,
+              "autoUpdateIntervalSeconds": 10800
             }
             """);
         using var actual = JsonDocument.Parse(File.ReadAllText(store.FilePath));
@@ -114,23 +114,36 @@ public sealed class RelayConfigurationStoreTests
         var store = fixture.Store;
 
         var defaults = store.Read();
-        Assert.False(defaults.AutoUpdate);
-        Assert.Equal(86_400, defaults.AutoUpdateIntervalSeconds);
+        Assert.True(defaults.AutoUpdate);
+        Assert.Equal(10_800, defaults.AutoUpdateIntervalSeconds);
 
-        store.Set("autoUpdate", "true");
+        store.Set("autoUpdate", "false");
         store.Set("autoUpdateIntervalSeconds", "3600");
 
         var reloaded = new RelayConfigurationStore(store.FilePath).Read();
-        Assert.True(reloaded.AutoUpdate);
+        Assert.False(reloaded.AutoUpdate);
         Assert.Equal(3_600, reloaded.AutoUpdateIntervalSeconds);
 
         var cleared = store.Clear("autoUpdate");
-        Assert.False(cleared.AutoUpdate);
+        Assert.True(cleared.AutoUpdate);
         Assert.Equal(3_600, cleared.AutoUpdateIntervalSeconds);
         Assert.False(store.ReadSavedDocument()!.AutoUpdate.HasValue);
 
         store.Clear("autoUpdateIntervalSeconds");
-        Assert.Equal(86_400, store.Read().AutoUpdateIntervalSeconds);
+        Assert.Equal(10_800, store.Read().AutoUpdateIntervalSeconds);
+    }
+
+    [Fact]
+    public void MissingAutoUpdateFieldsInSavedConfigurationUseCurrentDefaults()
+    {
+        using var fixture = new ConfigurationFixture();
+        File.WriteAllText(fixture.Store.FilePath, "{ \"schemaVersion\": 1, \"port\": 14001 }");
+
+        var settings = fixture.Store.Read();
+
+        Assert.Equal(14_001, settings.Port);
+        Assert.True(settings.AutoUpdate);
+        Assert.Equal(10_800, settings.AutoUpdateIntervalSeconds);
     }
 
     [Theory]
@@ -200,9 +213,9 @@ public sealed class RelayConfigurationStoreTests
         Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(clearOptions, output, error));
         using (var clearJson = JsonDocument.Parse(output.ToString()))
         {
-            Assert.False(clearJson.RootElement.GetProperty("effective").GetProperty("autoUpdate").GetBoolean());
+            Assert.True(clearJson.RootElement.GetProperty("effective").GetProperty("autoUpdate").GetBoolean());
         }
-        Assert.False(fixture.Store.Read().AutoUpdate);
+        Assert.True(fixture.Store.Read().AutoUpdate);
         Assert.Equal(14_001, fixture.Store.Read().Port);
     }
 

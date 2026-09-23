@@ -87,6 +87,8 @@ foreach ($mode in @('default', 'json')) {
         $port = Get-FreePort
         $destinationPort = Get-FreePort
         $destinationPath = "/synthetic-untrusted-$mode-path"
+        & $executable --config-file $configPath init --port $port --lease-seconds 120 --json > (Join-Path $caseRoot 'init.json')
+        if ($LASTEXITCODE -ne 0) { throw 'Could not initialize the owned logging configuration.' }
         $arguments = @('--config-file', (Quote-Argument $configPath), '--bind', '127.0.0.1', '--port', "$port", '--lease-seconds', '120', 'server')
         if ($mode -eq 'json') { $arguments = @('--json') + $arguments }
         $start = @{
@@ -101,6 +103,8 @@ foreach ($mode in @('default', 'json')) {
         $client = [System.Net.Http.HttpClient]::new($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(3)
         Wait-Ready $process $client "http://127.0.0.1:$port/health"
+        $doctor = Join-Path $PSScriptRoot '../../.agents/skills/verify-orelay/scripts/doctor.ps1'
+        $null = & $doctor -ExecutablePath $executable -ConfigPath $configPath -EvidencePath (Join-Path $caseRoot 'doctor.json')
         Wait-Log $stderrPath 'Listening on'
 
         $callbackUrl = "http://127.0.0.1:$destinationPort$destinationPath"
@@ -126,7 +130,7 @@ foreach ($mode in @('default', 'json')) {
         $location = $callback.Headers.Location.AbsoluteUri
         if ([int]$callback.StatusCode -ne 302 -or $location -cne "${callbackUrl}?$rawQuery") { throw 'Successful callback did not return the expected redirect.' }
         $callback.Dispose()
-        Wait-Log $stderrPath "Forwarded callback for $idPrefix"
+        Wait-Log $stderrPath "Callback redirect issued for $idPrefix"
 
         $malformed = $client.GetAsync("http://127.0.0.1:$port/callback?state=synthetic-$mode-malformed-state&code=synthetic-$mode-code-secret&error=synthetic-$mode-error-secret").GetAwaiter().GetResult()
         if ([int]$malformed.StatusCode -ne 400) { throw 'Malformed callback did not return HTTP 400.' }
@@ -162,18 +166,85 @@ foreach ($mode in @('default', 'json')) {
                 if ($line -notmatch '^\d{2}:\d{2}:\d{2} (info|warn): ORelay\[\d+\] ') { throw 'Text logs did not include the timestamp and level.' }
             }
         }
-        [pscustomobject]@{ Mode = $mode; Rid = $Rid; Status = 'passed'; StderrLines = $lines.Count } |
+        $logDirectory = Join-Path $workRoot 'logs'
+        $fileLog = Join-Path $logDirectory 'orelay.log'
+        Wait-Log $fileLog 'Removed worktree'
+        $fileText = Get-Content -Raw -LiteralPath $fileLog
+        foreach ($event in @('started in foreground mode; automatic update scheduling unavailable outside a native service', 'Listening on', 'Registered worktree', 'Callback redirect issued', 'Request rejected', 'Removed worktree')) {
+            if (-not $fileText.Contains($event)) { throw 'File log is missing an observed relay action.' }
+        }
+        foreach ($sentinel in @($destinationPath, "synthetic-$mode-state-secret", "synthetic-$mode-malformed-state", "synthetic-$mode-code-secret", "synthetic-$mode-error-secret")) {
+            if ($fileText.Contains($sentinel)) { throw 'A synthetic callback value or destination path leaked into file logs.' }
+        }
+        Copy-Item -LiteralPath $fileLog -Destination (Join-Path $caseRoot 'before-rotation.log')
+
+        # Seed the size boundary, then make the real server write and rotate.
+        # Four generations prove that the oldest of three retained files is removed.
+        for ($generation = 1; $generation -le 4; $generation++) {
+            [IO.File]::AppendAllText($fileLog, "retention-marker-$generation`n")
+            $padding = [IO.File]::Open($fileLog, [IO.FileMode]::Open, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            try { $padding.SetLength(2 * 1024 * 1024) } finally { $padding.Dispose() }
+            $rejected = $client.GetAsync("http://127.0.0.1:$port/callback?state=invalid").GetAwaiter().GetResult()
+            if ([int]$rejected.StatusCode -ne 400) { throw 'Rotation trigger request did not fail as expected.' }
+            $rejected.Dispose()
+        }
+        $logFiles = @(Get-ChildItem -LiteralPath $logDirectory -Filter '*.log')
+        if ($logFiles.Count -ne 3 -or @($logFiles | Where-Object Length -GT (2 * 1024 * 1024)).Count) {
+            throw 'File log rotation violated the three-file or 2 MiB limit.'
+        }
+        $retained = ($logFiles | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }) -join ''
+        if ($retained.Contains('retention-marker-1') -or $retained.Contains('retention-marker-2') -or
+            -not $retained.Contains('retention-marker-3') -or -not $retained.Contains('retention-marker-4')) {
+            throw 'Log rotation did not keep the newest generations.'
+        }
+
+        # The detached updater and server must append to the same log safely.
+        $workerConfig = Join-Path $workRoot 'worker.json'
+        '{"schemaVersion":1,"autoUpdate":false}' | Set-Content -LiteralPath $workerConfig
+        $workerStart = [Diagnostics.ProcessStartInfo]::new($executable)
+        $workerStart.UseShellExecute = $false
+        $workerStart.CreateNoWindow = $true
+        foreach ($argument in @('__auto-update', $workerConfig, 'orelay-logging-smoke')) { $workerStart.ArgumentList.Add($argument) }
+        $worker = [Diagnostics.Process]::Start($workerStart)
+        $workerId = $worker.Id
+        try {
+            for ($i = 0; $i -lt 20; $i++) {
+                $rejected = $client.GetAsync("http://127.0.0.1:$port/callback?state=invalid").GetAwaiter().GetResult()
+                if ([int]$rejected.StatusCode -ne 400) { throw 'Concurrent logging request failed.' }
+                $rejected.Dispose()
+            }
+            if (-not $worker.WaitForExit(10000) -or $worker.ExitCode -ne 0) { throw 'Owned disabled worker did not finish successfully.' }
+        } finally { Stop-OwnedProcess $worker }
+        Wait-Log $fileLog 'Automatic update completed: disabled'
+        $currentLines = @(Get-Lines $fileLog)
+        if (@($currentLines | Where-Object { $_ -like '*Request rejected:*' }).Count -ne 21 -or
+            @($currentLines | Where-Object { $_ -like '*Automatic update check started*' }).Count -ne 1) {
+            throw 'Concurrent server and worker logging lost records.'
+        }
+        if (@($currentLines | Where-Object { $_ -notmatch '^\d{4}-\d{2}-\d{2}T.*\[(Information|Warning)\] ORelay' }).Count) {
+            throw 'Concurrent file logging produced an incomplete record.'
+        }
+        $serverRecord = "[pid $($process.Id)] [Warning] ORelay[5]: Request rejected:"
+        $workerRecord = "[pid $workerId] [Information] ORelay.Updating.ServiceAutoUpdateWorker[4]: Automatic update completed: disabled; reason=disabled-in-configuration, service=orelay-logging-smoke,"
+        if (@($currentLines | Where-Object { $_.Contains($serverRecord) }).Count -ne 21 -or
+            @($currentLines | Where-Object { $_.Contains($workerRecord) }).Count -ne 1) {
+            throw 'File records did not identify the correct server and worker processes or outcome.'
+        }
+        [pscustomobject]@{ Mode = $mode; Rid = $Rid; Status = 'passed'; StderrLines = $lines.Count; FileCount = $logFiles.Count; MaximumFileBytes = 2 * 1024 * 1024; ConcurrentRecords = $currentLines.Count } |
             ConvertTo-Json | Set-Content -LiteralPath $resultPath
         $caseStatus = 'passed'
     }
     finally {
         if ($null -ne $client) { $client.Dispose() }
         Stop-OwnedProcess $process
-        $databasePath = [System.IO.Path]::ChangeExtension($configPath, 'registrations.db')
-        foreach ($ownedFile in @($configPath, "$configPath.lock", $databasePath, "$databasePath-journal")) {
-            if (Test-Path -LiteralPath $ownedFile) { Remove-Item -LiteralPath $ownedFile }
+        $logDirectory = Join-Path $workRoot 'logs'
+        if (Test-Path -LiteralPath $logDirectory) {
+            Copy-Item -LiteralPath $logDirectory -Destination (Join-Path $caseRoot 'logs') -Recurse
         }
-        Remove-Item -LiteralPath $workRoot
+        $allowedRoot = [IO.Path]::GetFullPath((Join-Path $runRootPath 'work')) + [IO.Path]::DirectorySeparatorChar
+        $resolvedWork = [IO.Path]::GetFullPath($workRoot)
+        if (-not $resolvedWork.StartsWith($allowedRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe logging cleanup path.' }
+        Remove-Item -LiteralPath $resolvedWork -Recurse -Force
         if ($caseStatus -ne 'passed') {
             [pscustomobject]@{ Mode = $mode; Rid = $Rid; Status = $caseStatus } |
                 ConvertTo-Json | Set-Content -LiteralPath $resultPath
@@ -181,4 +252,5 @@ foreach ($mode in @('default', 'json')) {
     }
 }
 
+& (Join-Path $PSScriptRoot 'cli-logging-smoke.ps1') -ExecutablePath $executable -RunRoot $runRootPath
 Write-Output "Logging smoke passed. Evidence: $(Join-Path $runRootPath 'evidence')"

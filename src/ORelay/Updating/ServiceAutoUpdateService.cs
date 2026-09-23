@@ -42,9 +42,25 @@ internal sealed partial class ServiceAutoUpdateService(
         {
             // The first check is due one interval after this service starts.
             var lastAttempt = _startedAt;
+            (bool Enabled, int Interval, DateTimeOffset Anchor)? lastSchedule = null;
             while (!stoppingToken.IsCancellationRequested)
             {
                 var settings = state.Current;
+                var schedule = (settings.AutoUpdate, settings.AutoUpdateIntervalSeconds, lastAttempt);
+                if (lastSchedule != schedule)
+                {
+                    if (settings.AutoUpdate)
+                    {
+                        var due = lastAttempt.AddSeconds(settings.AutoUpdateIntervalSeconds);
+                        var now = _timeProvider.GetUtcNow();
+                        ScheduleChanged(logger, serviceName, settings.AutoUpdateIntervalSeconds, due < now ? now : due);
+                    }
+                    else
+                    {
+                        ScheduleDisabled(logger, serviceName);
+                    }
+                    lastSchedule = schedule;
+                }
                 if (!settings.AutoUpdate)
                 {
                     await _changes.Reader.ReadAsync(stoppingToken).ConfigureAwait(false);
@@ -61,7 +77,7 @@ internal sealed partial class ServiceAutoUpdateService(
                     }
                     catch (Exception) when (!stoppingToken.IsCancellationRequested)
                     {
-                        WorkerFailed(logger);
+                        ScheduleWaitFailed(logger);
                         lastAttempt = _timeProvider.GetUtcNow();
                     }
                     continue;
@@ -75,6 +91,7 @@ internal sealed partial class ServiceAutoUpdateService(
 
                 try
                 {
+                    WorkerStarting(logger);
                     var exitCode = await _launch(executablePath, configurationPath, serviceName, stoppingToken)
                         .ConfigureAwait(false);
                     if (exitCode != 0)
@@ -138,4 +155,16 @@ internal sealed partial class ServiceAutoUpdateService(
 
     [LoggerMessage(2, LogLevel.Warning, "Could not run the automatic update worker. The next attempt is after the configured interval.")]
     private static partial void WorkerFailed(ILogger logger);
+
+    [LoggerMessage(3, LogLevel.Information, "Automatic updates enabled for {ServiceName}: interval={IntervalSeconds}s, next check at {NextCheckUtc:O}.")]
+    private static partial void ScheduleChanged(ILogger logger, string serviceName, int intervalSeconds, DateTimeOffset nextCheckUtc);
+
+    [LoggerMessage(4, LogLevel.Information, "Starting automatic update worker.")]
+    private static partial void WorkerStarting(ILogger logger);
+
+    [LoggerMessage(5, LogLevel.Information, "Automatic updates disabled for {ServiceName}; no check scheduled.")]
+    private static partial void ScheduleDisabled(ILogger logger, string serviceName);
+
+    [LoggerMessage(6, LogLevel.Warning, "Automatic update timer failed. Rescheduling after the configured interval.")]
+    private static partial void ScheduleWaitFailed(ILogger logger);
 }

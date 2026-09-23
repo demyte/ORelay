@@ -23,8 +23,8 @@ public static class RelayConfigurationDefaults
     public const string AutoDiscovery = "none";
     public const int LeaseSeconds = 300;
     public const int MaxRegistrations = 1_000;
-    public const bool AutoUpdate = false;
-    public const int AutoUpdateIntervalSeconds = 86_400;
+    public const bool AutoUpdate = true;
+    public const int AutoUpdateIntervalSeconds = 10_800;
 
     public static RelaySettings Settings { get; } = new(
         Port,

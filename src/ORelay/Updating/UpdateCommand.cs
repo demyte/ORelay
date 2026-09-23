@@ -1,18 +1,21 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using ORelay.Cli;
 
 namespace ORelay.Updating;
 
-public static class UpdateCommand
+public static partial class UpdateCommand
 {
-    public static async Task<int> ExecuteAsync(CliOptions options, TextWriter output, TextWriter error)
+    public static async Task<int> ExecuteAsync(CliOptions options, TextWriter output, TextWriter error,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(error);
 
-        var engine = new UpdateEngine();
+        var isReadOnlyCheck = options.Command == CliCommand.Update && options.Update?.Check == true;
+        var engine = new UpdateEngine(logger: isReadOnlyCheck ? null : loggerFactory?.CreateLogger<UpdateEngine>());
         UpdateResult result;
         if (options.Command == CliCommand.Update && options.Update is not null)
         {
@@ -29,6 +32,20 @@ public static class UpdateCommand
         {
             await error.WriteLineAsync("error: unsupported install or update command");
             return CliExitCodes.UsageError;
+        }
+
+        if (!isReadOnlyCheck && loggerFactory is not null)
+        {
+            var logger = loggerFactory.CreateLogger("ORelay.Updating.UpdateCommand");
+            var operation = options.Command == CliCommand.Install ? "install" : "update";
+            if (result.Succeeded)
+            {
+                UpdateCompleted(logger, operation, result.CurrentVersion, result.LatestVersion, result.Changed, result.ErrorCode);
+            }
+            else
+            {
+                UpdateFailed(logger, operation, result.CurrentVersion, result.LatestVersion, result.Changed, result.ErrorCode);
+            }
         }
 
         if (options.IsJson)
@@ -49,6 +66,16 @@ public static class UpdateCommand
     public static string DefaultInstallDirectory() => OperatingSystem.IsWindows() ?
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ORelay") :
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin");
+
+    [LoggerMessage(1, LogLevel.Information,
+        "Manual {Operation} completed: current={CurrentVersion}, latest={LatestVersion}, changed={Changed}, error={ErrorCode}.")]
+    private static partial void UpdateCompleted(ILogger logger, string operation, string currentVersion, string? latestVersion,
+        bool changed, UpdateErrorCode? errorCode);
+
+    [LoggerMessage(2, LogLevel.Warning,
+        "Manual {Operation} failed: current={CurrentVersion}, latest={LatestVersion}, changed={Changed}, error={ErrorCode}.")]
+    private static partial void UpdateFailed(ILogger logger, string operation, string currentVersion, string? latestVersion,
+        bool changed, UpdateErrorCode? errorCode);
 }
 
 [JsonSourceGenerationOptions(WriteIndented = false, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

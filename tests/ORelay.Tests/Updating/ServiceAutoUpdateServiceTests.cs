@@ -1,12 +1,73 @@
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ORelay.Configuration;
+using ORelay.Diagnostics;
 using ORelay.Updating;
 
 namespace ORelay.Tests.Updating;
 
 public sealed class ServiceAutoUpdateServiceTests
 {
+    [Fact]
+    public async Task LogsDisabledAndEachActualScheduleChange()
+    {
+        var clock = new ManualClock();
+        var delay = new ControlledDelay();
+        var state = CreateState(enabled: false, interval: 100);
+        var workerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var workerFinished = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var fixture = new LogFixture();
+        using var loggerFactory = LoggerFactory.Create(builder =>
+            builder.AddProvider(new RotatingFileLoggerProvider(fixture.ConfigurationPath)));
+        using var service = Create(state, clock, delay, (_, _, _, _) =>
+        {
+            workerStarted.SetResult();
+            return workerFinished.Task;
+        }, loggerFactory.CreateLogger<ServiceAutoUpdateService>());
+
+        await service.StartAsync(CancellationToken.None);
+        await WaitForLogAsync(fixture.Current,
+            "Automatic updates disabled for custom-service; no check scheduled.");
+        state.Publish(state.Current with { AutoUpdate = true });
+        var initial = await delay.NextAsync();
+        Assert.Equal(TimeSpan.FromSeconds(100), initial.Interval);
+        var initialDue = clock.GetUtcNow().AddSeconds(100);
+        var log = File.ReadAllText(fixture.Current);
+        Assert.Contains("Automatic updates disabled for custom-service; no check scheduled.", log);
+        Assert.Contains($"interval=100s, next check at {initialDue:O}", log);
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        state.Publish(state.Current with { AutoUpdateIntervalSeconds = 200 });
+        await initial.Canceled.WaitAsync(TestTimeout);
+        var extended = await delay.NextAsync();
+        Assert.Equal(TimeSpan.FromSeconds(190), extended.Interval);
+        Assert.Contains($"interval=200s, next check at {clock.GetUtcNow().AddSeconds(190):O}",
+            File.ReadAllText(fixture.Current));
+
+        clock.Advance(TimeSpan.FromSeconds(10));
+        state.Publish(state.Current with { Port = state.Current.Port + 1 });
+        await extended.Canceled.WaitAsync(TestTimeout);
+        var unchanged = await delay.NextAsync();
+        Assert.Equal(TimeSpan.FromSeconds(180), unchanged.Interval);
+        log = File.ReadAllText(fixture.Current);
+        Assert.Equal(2, Count(log, "Automatic updates enabled for custom-service:"));
+
+        clock.Advance(TimeSpan.FromSeconds(180));
+        unchanged.Complete();
+        await workerStarted.Task.WaitAsync(TestTimeout);
+        clock.Advance(TimeSpan.FromSeconds(25));
+        workerFinished.SetResult(0);
+        var afterAttempt = await delay.NextAsync();
+        Assert.Equal(TimeSpan.FromSeconds(200), afterAttempt.Interval);
+        var completionDue = clock.GetUtcNow().AddSeconds(200);
+        log = File.ReadAllText(fixture.Current);
+        Assert.Contains($"interval=200s, next check at {completionDue:O}", log);
+        Assert.Equal(3, Count(log, "Automatic updates enabled for custom-service:"));
+
+        await service.StopAsync(CancellationToken.None);
+    }
+
     [Fact]
     public async Task Timer_WaitsForInterval_AndDoesNotOverlapWorkers()
     {
@@ -243,9 +304,26 @@ public sealed class ServiceAutoUpdateServiceTests
         });
 
     private static ServiceAutoUpdateService Create(RelayConfigurationState state, ManualClock clock,
-        ControlledDelay delay, Func<string, string, string, CancellationToken, Task<int>> launch) =>
+        ControlledDelay delay, Func<string, string, string, CancellationToken, Task<int>> launch,
+        ILogger<ServiceAutoUpdateService>? logger = null) =>
         new("executable", "selected-config", "custom-service", state,
-            NullLogger<ServiceAutoUpdateService>.Instance, launch, clock, delay.WaitAsync);
+            logger ?? NullLogger<ServiceAutoUpdateService>.Instance, launch, clock, delay.WaitAsync);
+
+    private static int Count(string text, string value) =>
+        text.Split(value, StringSplitOptions.None).Length - 1;
+
+    private static async Task WaitForLogAsync(string path, string value)
+    {
+        var timeout = DateTime.UtcNow + TestTimeout;
+        while (DateTime.UtcNow < timeout)
+        {
+            if (File.Exists(path) && File.ReadAllText(path).Contains(value, StringComparison.Ordinal))
+                return;
+            await Task.Delay(10);
+        }
+
+        Assert.Fail($"Timed out waiting for log entry: {value}");
+    }
 
     private sealed class ManualClock : TimeProvider
     {
@@ -288,5 +366,20 @@ public sealed class ServiceAutoUpdateServiceTests
         }
 
         public void Complete() => _completion.SetResult();
+    }
+
+    private sealed class LogFixture : IDisposable
+    {
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "orelay-auto-update-log-tests",
+            Guid.NewGuid().ToString("N"));
+
+        internal string ConfigurationPath => Path.Combine(_root, "orelay.json");
+        internal string Current => Path.Combine(_root, "logs", "orelay.log");
+
+        public void Dispose()
+        {
+            if (Directory.Exists(_root))
+                Directory.Delete(_root, recursive: true);
+        }
     }
 }

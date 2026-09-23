@@ -151,7 +151,7 @@ public static class RelayServerEndpoints
         SetNoCacheHeaders(context.Response);
         context.Response.StatusCode = StatusCodes.Status302Found;
         context.Response.Headers.Location = location;
-        RelayServerLog.Forwarded(Logger(context), registration.Id[..8],
+        RelayServerLog.Redirected(Logger(context), registration.Id[..8],
             RelayServerLog.DestinationOrigin(registration.CallbackUrl));
         return Results.Empty;
     }

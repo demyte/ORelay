@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using ORelay.Cli;
 using ORelay.Configuration;
 using ORelay.Diagnostics;
@@ -11,9 +13,91 @@ using ORelay.Updating;
 
 namespace ORelay;
 
-internal static class ApplicationCommands
+internal static partial class ApplicationCommands
 {
     public static async Task<int> ExecuteAsync(CliOptions options, TextWriter output, TextWriter error)
+    {
+        var operation = MutationName(options);
+        if (operation is null)
+            return await ExecuteCoreAsync(options, output, error, null).ConfigureAwait(false);
+
+        using var logging = CreateLogging(options.ConfigFile, error);
+        if (logging is null)
+            return await ExecuteCoreAsync(options, output, error, null).ConfigureAwait(false);
+
+        var logger = logging.CreateLogger("ORelay.Cli");
+        var elapsed = Stopwatch.StartNew();
+        CommandStarted(logger, operation);
+        try
+        {
+            var exitCode = await ExecuteCoreAsync(options, output, error, logging).ConfigureAwait(false);
+            if (exitCode == 0) CommandCompleted(logger, operation, exitCode, elapsed.ElapsedMilliseconds);
+            else CommandFailed(logger, operation, exitCode, elapsed.ElapsedMilliseconds);
+            return exitCode;
+        }
+        catch (Exception)
+        {
+            CommandInterrupted(logger, operation, elapsed.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    // Only fixed operation names enter the log. Arguments, output, exception
+    // messages, and configuration values may contain secrets.
+    private static string? MutationName(CliOptions options) => options.Command switch
+    {
+        CliCommand.Init => "init",
+        CliCommand.Setup => "setup",
+        CliCommand.Install => "install",
+        CliCommand.Update when options.Update is { Check: false } => "update",
+        CliCommand.Config when options.Config is { Action: ConfigAction.Set } => "config set",
+        CliCommand.Config when options.Config is { Action: ConfigAction.Clear } => "config clear",
+        CliCommand.Doctor when options.Doctor is { Fix: true } => "doctor --fix",
+        CliCommand.Service => options.Service?.Action switch
+        {
+            ServiceAction.Install => "service install",
+            ServiceAction.Start => "service start",
+            ServiceAction.Stop => "service stop",
+            ServiceAction.Restart => "service restart",
+            ServiceAction.Uninstall => "service uninstall",
+            ServiceAction.Enable => "service enable",
+            ServiceAction.Disable => "service disable",
+            _ => null,
+        },
+        _ => null,
+    };
+
+    private static ILoggerFactory? CreateLogging(string? configFile, TextWriter error)
+    {
+        try
+        {
+            var path = RelayConfigurationPath.Resolve(configFile);
+            return LoggerFactory.Create(builder => builder
+                .SetMinimumLevel(LogLevel.Information)
+                .AddProvider(new RotatingFileLoggerProvider(path)));
+        }
+        catch (Exception)
+        {
+            // Logging must not prevent the requested command from running.
+            error.WriteLine("ORelay could not initialize command file logging.");
+            return null;
+        }
+    }
+
+    [LoggerMessage(1, LogLevel.Information, "CLI command started: {Operation}.")]
+    private static partial void CommandStarted(ILogger logger, string operation);
+
+    [LoggerMessage(2, LogLevel.Information, "CLI command completed: {Operation}; exit={ExitCode}, elapsed={ElapsedMilliseconds}ms.")]
+    private static partial void CommandCompleted(ILogger logger, string operation, int exitCode, long elapsedMilliseconds);
+
+    [LoggerMessage(3, LogLevel.Warning, "CLI command failed: {Operation}; exit={ExitCode}, elapsed={ElapsedMilliseconds}ms. See command output for details.")]
+    private static partial void CommandFailed(ILogger logger, string operation, int exitCode, long elapsedMilliseconds);
+
+    [LoggerMessage(4, LogLevel.Warning, "CLI command interrupted: {Operation}; elapsed={ElapsedMilliseconds}ms. No exit result was returned.")]
+    private static partial void CommandInterrupted(ILogger logger, string operation, long elapsedMilliseconds);
+
+    private static async Task<int> ExecuteCoreAsync(CliOptions options, TextWriter output, TextWriter error,
+        ILoggerFactory? logging)
     {
         try
         {
@@ -47,7 +131,7 @@ internal static class ApplicationCommands
                     return await ServiceCommand.ExecuteAsync(options, output, error, options.Service?.Name, null).ConfigureAwait(false);
                 case CliCommand.Update:
                 case CliCommand.Install:
-                    return await UpdateCommand.ExecuteAsync(options, output, error).ConfigureAwait(false);
+                    return await UpdateCommand.ExecuteAsync(options, output, error, logging).ConfigureAwait(false);
                 default:
                     await error.WriteLineAsync("This command has not been integrated into this build yet.").ConfigureAwait(false);
                     return CliExitCodes.CommandUnavailable;

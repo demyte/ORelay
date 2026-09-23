@@ -12,8 +12,8 @@ internal static partial class RelayServerLog
     [LoggerMessage(2, LogLevel.Information, "Registered worktree {Registration} -> {Destination} (lease {LeaseSeconds}s)")]
     internal static partial void Registered(ILogger logger, string registration, string destination, int leaseSeconds);
 
-    [LoggerMessage(3, LogLevel.Information, "Forwarded callback for {Registration} -> {Destination}")]
-    internal static partial void Forwarded(ILogger logger, string registration, string destination);
+    [LoggerMessage(3, LogLevel.Information, "Callback redirect issued for {Registration} -> {Destination}")]
+    internal static partial void Redirected(ILogger logger, string registration, string destination);
 
     [LoggerMessage(4, LogLevel.Information, "Removed worktree {Registration}")]
     internal static partial void Removed(ILogger logger, string registration);
@@ -32,6 +32,9 @@ internal static partial class RelayServerLog
 
     [LoggerMessage(9, LogLevel.Critical, "Could not restore the previous listener; correct the configuration or restart the relay")]
     internal static partial void ListenerRestoreFailed(ILogger logger);
+
+    [LoggerMessage(10, LogLevel.Information, "ORelay {Version} started in {Mode} mode; automatic update scheduling {UpdateScheduling}.")]
+    internal static partial void Started(ILogger logger, string version, string mode, string updateScheduling);
 
     // Destination paths can contain caller-supplied secrets. Only show the
     // validated origin and a short reference to a server-generated ID.

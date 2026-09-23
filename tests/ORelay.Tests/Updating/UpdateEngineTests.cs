@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using ORelay.Diagnostics;
 using ORelay.Services;
 using ORelay.Updating;
@@ -166,6 +167,10 @@ public sealed class UpdateEngineTests
         Assert.False(fixture.Service.IsStopped);
         Assert.Equal(new[] { ServiceOperation.Stop, ServiceOperation.Start, ServiceOperation.Start },
             fixture.Service.Operations.Where(operation => operation != ServiceOperation.Status));
+        var log = File.ReadAllText(fixture.LogPath);
+        Assert.Contains("Rolling back to the previous executable", log);
+        Assert.Contains("Rollback completed", log);
+        Assert.DoesNotContain("Executable replacement completed", log);
     }
 
     [Fact]
@@ -192,6 +197,14 @@ public sealed class UpdateEngineTests
             Assert.Equal(fixture.Target, request.ExecutablePath);
         });
         Assert.Equal("http://[::1]:45124/health", Assert.Single(fixture.Health.Urls).AbsoluteUri);
+        var log = File.ReadAllText(fixture.LogPath);
+        Assert.Contains("Downloading update 1.1.0", log);
+        Assert.Contains("Update download checksum verified", log);
+        Assert.Contains("Stopping service", log);
+        Assert.Contains("Updated service is healthy", log);
+        Assert.Contains("Executable replacement completed: 1.1.0", log);
+        Assert.DoesNotContain("test-token", log);
+        Assert.DoesNotContain("Rolling back", log);
     }
 
     [Fact]
@@ -306,6 +319,27 @@ public sealed class UpdateEngineTests
         string[] expectedContents = ["old executable", "new executable", "new executable", "old executable"];
         Assert.Equal(expectedContents, fixture.Service.LifecycleExecutableContents);
         Assert.Equal(21, fixture.Health.Urls.Count);
+    }
+
+    [Fact]
+    public async Task InstallSelf_FailedFreshInstallationDoesNotClaimToRestorePreviousExecutable()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        fixture.Runtime.CandidateVersion = fixture.Runtime.CurrentVersion;
+        fixture.Runtime.InstalledVersion = "9.0.0";
+        File.Delete(fixture.Target);
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.VersionMismatch, result.ErrorCode);
+        Assert.False(File.Exists(fixture.Target));
+        Assert.Contains("failed installation will be removed", result.Message);
+        var log = File.ReadAllText(fixture.LogPath);
+        Assert.Contains("Removed failed executable from installation path", log);
+        Assert.DoesNotContain("Rolling back to the previous executable", log);
+        Assert.DoesNotContain("Rollback completed", log);
     }
 
     [Fact]
@@ -446,6 +480,7 @@ public sealed class UpdateEngineTests
 
     private sealed class Fixture : IDisposable
     {
+        private readonly ILoggerFactory _logging;
         public Fixture()
         {
             Directory = Path.Combine(Path.GetTempPath(), "orelay-update-test-" + Guid.NewGuid().ToString("N"));
@@ -458,8 +493,10 @@ public sealed class UpdateEngineTests
             Download = new FakeDownload();
             Service = new FakeService();
             Health = new FakeHealth();
+            _logging = LoggerFactory.Create(builder => builder.AddProvider(
+                new RotatingFileLoggerProvider(Path.Combine(Directory, "orelay.json"))));
             Engine = new UpdateEngine(new HttpClient(Download), Runtime, Service, token: "test-token",
-                health: Health);
+                health: Health, logger: _logging.CreateLogger<UpdateEngine>());
         }
 
         public string Directory { get; }
@@ -470,8 +507,13 @@ public sealed class UpdateEngineTests
         public FakeService Service { get; }
         public FakeHealth Health { get; }
         public UpdateEngine Engine { get; }
+        public string LogPath => Path.Combine(Directory, "logs", "orelay.log");
 
-        public void Dispose() => System.IO.Directory.Delete(Directory, recursive: true);
+        public void Dispose()
+        {
+            _logging.Dispose();
+            System.IO.Directory.Delete(Directory, recursive: true);
+        }
     }
 
     private sealed class FakeRuntime(string processPath, string target) : IUpdateRuntime

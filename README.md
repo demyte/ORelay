@@ -126,16 +126,17 @@ orelay --config-file <absolute-config-path> update --restart-service --name <ser
 
 A short restart preserves live registrations. A lease that expires during an outage stays expired. The updater checks startup and restores the previous executable if replacement or startup fails.
 
-To enable automatic updates for an installed Windows or Linux service:
+Automatic updates are enabled for installed Windows and Linux services. To choose a different check interval:
 
 ```text
-orelay --config-file <absolute-config-path> config set autoUpdate true
 orelay --config-file <absolute-config-path> config set autoUpdateIntervalSeconds 86400
 ```
 
-Automatic updates are off by default. When enabled, the service checks for stable releases every 24 hours by default and restarts itself to apply an update. Set the interval in seconds, from `60` to `2592000`. Enabling updates or changing the interval takes effect while the service runs. The next check is due one interval after service startup or the last completed check, and runs immediately if already overdue. Foreground runs never check automatically.
+The service checks for stable releases every three hours by default and restarts itself to apply an update. This example sets a one-day interval. Set any interval from `60` to `2592000` seconds. Changing the interval takes effect while the service runs. The next check is due one interval after service startup or the last completed check, and runs immediately if already overdue. Foreground runs never check automatically. Set `autoUpdate` to `false` to disable checks. Existing saved `false` values and custom intervals remain in effect until you change or clear them.
 
-The service account needs permission to replace the executable and restart its service. Linux also requires `systemd-run` from systemd 254 or later. The latest check or installation result is written beside the selected config, for example `orelay.auto-update.json`. To turn updates off, set `autoUpdate` to `false`. A worker rereads that setting before installation; an installation already underway finishes normally.
+The service account needs permission to replace the executable and restart its service. Linux also requires `systemd-run` from systemd 254 or later. The latest check or installation result is written beside the selected config, for example `orelay.auto-update.json`. A worker rereads `autoUpdate` before installation; an installation already underway finishes normally.
+
+Relay activity and automatic update actions are logged under `logs` beside the selected configuration. ORelay keeps `orelay.log` and two backups, each limited to 2 MiB. Update logs include release checks, downloads, replacement, restart, rollback, and the final outcome. See the [CLI reference](docs/cli.md#foreground-server) for log contents and retention.
 
 ## Run as a service
 

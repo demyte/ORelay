@@ -75,13 +75,13 @@ pwsh -NoProfile -File .\scripts\format.ps1
 
 The helper does not claim service-manager, Tailscale, or Aspire coverage. Use the feature map for their exact source files and commands.
 
-For server logging changes, also run `.github/workflows/logging-smoke.ps1` against the published executable. The [relay feature map](features/relay-leases.md#console-logging) covers captured text/JSON output, redaction, and terminal colour checks.
+For server, updater, or CLI logging changes, also run `.github/workflows/logging-smoke.ps1` against the published executable. The [relay feature map](features/relay-leases.md#console-logging) covers text/JSON console output, file rotation, separate worker/server writes, CLI mutation outcomes, read-only command silence, redaction, and terminal colour checks.
 
 For versioning and release changes, follow [versions and releases](features/versions-releases.md). Use its isolated Git fixture and package-consumer check before an authorized release tag is pushed.
 
 For bootstrap, installation, and self-update changes, follow [installation and updates](features/installation-updates.md). Never use the user's installed binary, service, or configuration as the update target.
 
-For automatic service-update changes, pass `-CheckAutoUpdate` to the helper for the native foreground suppression check. It adds 65 seconds while the saved opt-in is enabled. This is separate from the disposable service-manager proof described in that feature map.
+For automatic service-update changes, pass `-CheckAutoUpdate` to the helper for the native foreground suppression check. It adds 65 seconds while automatic updates are enabled in the saved configuration. This is separate from the disposable service-manager proof described in that feature map.
 
 For setup changes, run `.github/workflows/setup-smoke.ps1` against the published executable using a run-owned `-RunRoot`. See [CLI and saved configuration](features/cli-config.md) for defaults, unattended setup, cancellation, and preservation checks. Service setup is separately exercised by the disposable Windows/Linux service smoke; the local helper never installs a service.
 

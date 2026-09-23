@@ -483,8 +483,8 @@ try {
         autoDiscovery = 'none'
         leaseSeconds = 300
         maxRegistrations = 1000
-        autoUpdate = $false
-        autoUpdateIntervalSeconds = 86400
+        autoUpdate = $true
+        autoUpdateIntervalSeconds = 10800
     }
     Assert-Equal @($defaults.PSObject.Properties).Count $expectedDefaults.Count 'Default configuration has unexpected fields.'
     foreach ($entry in $expectedDefaults.GetEnumerator()) {
@@ -494,6 +494,7 @@ try {
 
     if ($CheckAutoUpdate) {
         $workerServiceName = 'orelay-worker-verify-' + [Guid]::NewGuid().ToString('N')
+        [void](Invoke-Native -Arguments @('--config-file', $defaultsPath, 'config', 'set', 'autoUpdate', 'false') -EvidenceName 'auto-update-worker-disable')
         [void](Invoke-Native -Arguments @('__auto-update', $defaultsPath, $workerServiceName) -EvidenceName 'auto-update-worker-disabled')
         $workerResultPath = [System.IO.Path]::ChangeExtension($defaultsPath, 'auto-update.json')
         $disabledResult = Get-Content -Raw -LiteralPath $workerResultPath | ConvertFrom-Json
@@ -536,7 +537,7 @@ try {
     [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateIntervalSeconds', '60', '--json') -EvidenceName 'config-auto-update-interval')
     [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateIntervalSeconds', '59', '--json') -EvidenceName 'config-auto-update-invalid' -ExpectedExitCode 3)
     $autoConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-    Assert-Equal $autoConfig.autoUpdate $true 'Automatic update opt-in was not saved.'
+    Assert-Equal $autoConfig.autoUpdate $true 'Automatic updates were not enabled in the saved configuration.'
     Assert-Equal $autoConfig.autoUpdateIntervalSeconds 60 'Invalid interval changed the saved setting.'
 
     $overrideServer = Start-OwnedServer -ConfigPath $configPath -Port $overridePort -EvidencePrefix 'server-override'

@@ -1,24 +1,29 @@
 using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ORelay.Configuration;
 using ORelay.Diagnostics;
 using ORelay.Services;
 
 namespace ORelay.Updating;
 
-public sealed class UpdateEngine
+public sealed partial class UpdateEngine
 {
     private readonly IUpdateRuntime _runtime;
     private readonly Lazy<ReleaseClient> _releases;
     private readonly IPlatformServiceManager _services;
     private readonly IRelayHealthProbe _health;
+    private readonly ILogger<UpdateEngine> _logger;
 
     public UpdateEngine(HttpClient? http = null, IUpdateRuntime? runtime = null,
-        IPlatformServiceManager? services = null, string? token = null, IRelayHealthProbe? health = null)
+        IPlatformServiceManager? services = null, string? token = null, IRelayHealthProbe? health = null,
+        ILogger<UpdateEngine>? logger = null)
     {
         _runtime = runtime ?? new NativeUpdateRuntime();
         _releases = new Lazy<ReleaseClient>(() => new ReleaseClient(http, token));
         _services = services ?? ServiceManagerFactory.Create();
         _health = health ?? new HttpRelayHealthProbe();
+        _logger = logger ?? NullLogger<UpdateEngine>.Instance;
     }
 
     public async Task<UpdateResult> CheckAsync(UpdateRequest request, CancellationToken cancellationToken = default)
@@ -69,7 +74,9 @@ public sealed class UpdateEngine
             if (latest.CompareTo(installedVersion) == 0)
                 return new UpdateResult(true, false, current, latestVersion, target, "ORelay is already installed at this version.");
             var service = CheckService(target!, request.ConfigurationPath, request.ServiceName, request.RestartService);
+            DownloadStarting(_logger, latestVersion);
             var archive = await _releases.Value.DownloadVerifiedArchiveAsync(release, cancellationToken);
+            DownloadVerified(_logger);
             var candidate = UpdateArchive.ExtractExecutable(archive, rid);
             return await ReplaceAsync(candidate, target!, current, latestVersion, service,
                 request.RestartService, cancellationToken);
@@ -216,16 +223,19 @@ public sealed class UpdateEngine
             var version = await SafeReadVersionAsync(stage, cancellationToken);
             if (!string.Equals(NormalizeVersion(version), NormalizeVersion(nextVersion), StringComparison.Ordinal))
                 throw new UpdateException(UpdateErrorCode.VersionMismatch, "The candidate executable reports a different version.");
+            CandidateVerified(_logger, nextVersion);
             if (restart && service.Request is not null && service.State == ServiceState.Running)
             {
                 // The stop can take effect even when its confirmation fails.
                 restoreRunningService = true;
+                ServiceStopping(_logger);
                 var stopped = _services.Execute(ServiceOperation.Stop, service.Request);
                 if (!stopped.Succeeded || _services.Execute(ServiceOperation.Status, service.Request) is not
                     { Succeeded: true, State: ServiceState.Stopped })
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
                         "The service stop could not be confirmed. The executable was not changed.");
             }
+            ReplacingExecutable(_logger);
             if (hadTarget) File.Move(target, backup);
             try
             {
@@ -241,10 +251,12 @@ public sealed class UpdateEngine
             var installedVersion = await SafeReadVersionAsync(target, cancellationToken);
             if (!string.Equals(NormalizeVersion(installedVersion), NormalizeVersion(nextVersion), StringComparison.Ordinal))
                 throw new UpdateException(UpdateErrorCode.VersionMismatch,
-                    "The installed executable reports a different version. The previous executable will be restored.");
+                    hadTarget ? "The installed executable reports a different version. The previous executable will be restored." :
+                        "The installed executable reports a different version. The failed installation will be removed.");
 
             if (restoreRunningService && service.Request is not null)
             {
+                ServiceStarting(_logger);
                 var started = _services.Execute(ServiceOperation.Start, service.Request);
                 var healthy = started.Succeeded && _services.Execute(ServiceOperation.Status, service.Request) is
                 { Succeeded: true, State: ServiceState.Running } &&
@@ -253,6 +265,7 @@ public sealed class UpdateEngine
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
                         "The service did not start healthy. The previous executable will be restored.");
                 restoreRunningService = false;
+                ServiceHealthy(_logger);
             }
 
             var message = $"ORelay {nextVersion} installed at '{target}'.";
@@ -264,12 +277,16 @@ public sealed class UpdateEngine
                 catch (IOException) { message += $" Previous executable retained at '{backup}' until it can be removed."; }
                 catch (UnauthorizedAccessException) { message += $" Previous executable retained at '{backup}' until it can be removed."; }
             }
+            ReplacementCompleted(_logger, nextVersion);
             return new UpdateResult(true, true, previousVersion, nextVersion, target, message);
         }
         catch
         {
+            ReplacementFailed(_logger);
             if (replaced)
             {
+                if (hadTarget) RollbackStarting(_logger);
+                else RemovingFailedInstallation(_logger);
                 try
                 {
                     if (restart && service.Request is not null && service.State == ServiceState.Running)
@@ -290,8 +307,10 @@ public sealed class UpdateEngine
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
+                    RollbackFailed(_logger);
                     throw new UpdateException(UpdateErrorCode.InstallFailure,
-                        $"Replacement failed and automatic rollback could not complete. Previous executable: '{backup}'.");
+                        hadTarget ? $"Replacement failed and automatic rollback could not complete. Previous executable: '{backup}'." :
+                            "Installation failed and the failed executable could not be removed from the installation path.");
                 }
             }
             // A rejected stop may have left the original service running.
@@ -301,13 +320,19 @@ public sealed class UpdateEngine
                 restoreRunningService = false;
             if (restoreRunningService && service.Request is not null)
             {
+                PreviousServiceStarting(_logger);
                 var restored = _services.Execute(ServiceOperation.Start, service.Request);
                 if (!restored.Succeeded || _services.Execute(ServiceOperation.Status, service.Request) is not
                     { Succeeded: true, State: ServiceState.Running } ||
                     !await VerifyHealthAsync(service.Request.ConfigurationPath, cancellationToken))
+                {
+                    RollbackFailed(_logger);
                     throw new UpdateException(UpdateErrorCode.ServiceFailure,
                         "The previous executable is in place, but the service could not be restarted healthy.");
+                }
             }
+            if (replaced && !hadTarget) FailedInstallationRemoved(_logger);
+            else if (replaced || restoreRunningService) RollbackCompleted(_logger);
             throw;
         }
         finally
@@ -400,4 +425,35 @@ public sealed class UpdateEngine
             throw new UpdateException(UpdateErrorCode.Busy, "Another install or update is using this destination.");
         }
     }
+
+    [LoggerMessage(1, LogLevel.Information, "Downloading update {Version} and verifying its checksum.")]
+    private static partial void DownloadStarting(ILogger logger, string version);
+    [LoggerMessage(2, LogLevel.Information, "Update download checksum verified.")]
+    private static partial void DownloadVerified(ILogger logger);
+    [LoggerMessage(3, LogLevel.Information, "Update candidate version verified: {Version}.")]
+    private static partial void CandidateVerified(ILogger logger, string version);
+    [LoggerMessage(4, LogLevel.Information, "Stopping service for executable replacement.")]
+    private static partial void ServiceStopping(ILogger logger);
+    [LoggerMessage(5, LogLevel.Information, "Replacing executable.")]
+    private static partial void ReplacingExecutable(ILogger logger);
+    [LoggerMessage(6, LogLevel.Information, "Starting updated service and checking health.")]
+    private static partial void ServiceStarting(ILogger logger);
+    [LoggerMessage(7, LogLevel.Information, "Updated service is healthy.")]
+    private static partial void ServiceHealthy(ILogger logger);
+    [LoggerMessage(8, LogLevel.Information, "Executable replacement completed: {Version}.")]
+    private static partial void ReplacementCompleted(ILogger logger, string version);
+    [LoggerMessage(9, LogLevel.Warning, "Executable replacement failed; checking recovery.")]
+    private static partial void ReplacementFailed(ILogger logger);
+    [LoggerMessage(10, LogLevel.Warning, "Rolling back to the previous executable.")]
+    private static partial void RollbackStarting(ILogger logger);
+    [LoggerMessage(11, LogLevel.Information, "Restarting the previous service and checking health.")]
+    private static partial void PreviousServiceStarting(ILogger logger);
+    [LoggerMessage(12, LogLevel.Information, "Rollback completed.")]
+    private static partial void RollbackCompleted(ILogger logger);
+    [LoggerMessage(13, LogLevel.Error, "Rollback recovery failed; manual recovery is required.")]
+    private static partial void RollbackFailed(ILogger logger);
+    [LoggerMessage(14, LogLevel.Warning, "Removing failed installation; no previous executable was present.")]
+    private static partial void RemovingFailedInstallation(ILogger logger);
+    [LoggerMessage(15, LogLevel.Information, "Removed failed executable from installation path.")]
+    private static partial void FailedInstallationRemoved(ILogger logger);
 }

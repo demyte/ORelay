@@ -1035,6 +1035,10 @@ try {
     if ($init.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $script:ConfigPath -PathType Leaf)) {
         throw "Selected service configuration could not be initialized. Exit code $($init.ExitCode)."
     }
+    $disableAutoAtInit = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdate', 'false', '--json'
+    ) -EvidenceName 'service-auto-update-disable-at-init'
+    if ($disableAutoAtInit.ExitCode -ne 0) { throw 'Could not disable automatic updates in the run-owned service configuration.' }
 
     Invoke-LinuxUnprivilegedInstallProof
     Invoke-WindowsUnprivilegedInstallProof
@@ -1238,6 +1242,10 @@ try {
 
     Remove-Item -LiteralPath $failingStartMarker -Force
     $autoResultPath = [IO.Path]::ChangeExtension($script:ConfigPath, 'auto-update.json')
+    $disableAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdate', 'false', '--json'
+    ) -EvidenceName 'service-auto-update-disable'
+    if ($disableAuto.ExitCode -ne 0) { throw 'Could not disable automatic updates for the disabled-service proof.' }
     if (Test-Path -LiteralPath $autoResultPath) { throw 'Automatic update produced a result while disabled.' }
     $intervalAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
         '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdateIntervalSeconds', '60', '--json'

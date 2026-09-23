@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using ORelay.Configuration;
+using ORelay.Diagnostics;
 using ORelay.Services;
 using ORelay.Updating;
 
@@ -57,6 +58,8 @@ public static class RelayServerHost
         // Framework request logs can include OAuth values. Enable informational
         // output only for our own messages, which never include callback queries.
         builder.Logging.ClearProviders();
+        builder.Logging.AddProvider(new RotatingFileLoggerProvider(configurationPath ??
+            Path.ChangeExtension(registrationDatabasePath, "json")));
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
         builder.Logging.AddFilter(RelayServerLog.Category, LogLevel.Information);
         builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
@@ -107,6 +110,8 @@ public static class RelayServerHost
             options, () => RelayServerOptions.FromSettings(state.Current, registrationDatabasePath));
 
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
+        RelayServerLog.Started(logger, runtime.CurrentVersion, isService ? "service" : "foreground",
+            isService && runtime.IsNative ? "available" : "unavailable outside a native service");
         var listener = new RelayListenerReload(listenerConfiguration, app.Services.GetRequiredService<IServer>(), logger);
         using var monitor = configurationPath is null ? null : new RelayConfigurationMonitor(
             configurationPath,

@@ -59,12 +59,12 @@ The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic repl
 | `autoDiscovery` | `--auto-discovery` | `none` |
 | `leaseSeconds` | `--lease-seconds` | `300` |
 | `maxRegistrations` | `--max-registrations` | `1000` |
-| `autoUpdate` | Config only | `false` |
-| `autoUpdateIntervalSeconds` | Config only | `86400` |
+| `autoUpdate` | Config only | `true` |
+| `autoUpdateIntervalSeconds` | Config only | `10800` |
 
 Ports range from 1 to 65535, leases from 1 to 86400 seconds, and registration capacity from 1 to 1000000. Discovery accepts `none`, `local`, or `tailscale`. `none` and `local` use the configured listener/hostname for the relay; neither runs Tailscale.
 
-`autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Enabling updates or changing the interval takes effect while the service runs. The next check is due one interval after service startup or the last completed worker. Shortening the interval starts a check immediately if it is overdue. Checks never overlap.
+`autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Updates are enabled by default, with checks every three hours. Existing saved `false` values and custom intervals stay in effect until changed or cleared. Changing either setting takes effect while the service runs. The next check is due one interval after service startup or the last completed worker. Shortening the interval starts a check immediately if it is overdue. Checks never overlap.
 
 ### Live configuration
 
@@ -107,6 +107,16 @@ Registrations and renewals commit before the relay acknowledges them. Deletions 
 Server logs go to stderr. Each line has a local timestamp and a level, coloured in an interactive terminal. Registration and callback messages identify a worktree by the first eight characters of its registration ID and its destination origin, such as `http://localhost:5017`. Destination paths and callback query values are omitted. Health probes and successful lease renewals stay quiet.
 
 Redirecting stderr produces plain text without colour codes. Set `NO_COLOR=1` or `TERM=dumb` to disable colour in a terminal. With `server --json`, stdout contains the startup readiness object and stderr contains one JSON object per log event. Colour is disabled in JSON mode.
+
+The server and automatic updater also write plain-text UTF-8 logs under `logs` beside the selected configuration file. `orelay.log` is the current file, `orelay.1.log` is the previous file, and `orelay.2.log` is the oldest. There are at most three log files, each capped at 2 MiB, or 2,097,152 bytes. Before a write would exceed that size, ORelay removes the oldest file and rotates the others. Logs append across restarts. Configurations in the same directory share these files and their retention limit.
+
+File records have a UTC timestamp, process ID, level, application category, and event ID. Startup records identify the version and service or foreground mode. Update schedules show the service, interval, and next check time. Update attempts log release checks, downloads, checksum verification, replacement, restart, recovery, and a final status with the service, versions, elapsed time, and a safe reason code. Callback records confirm that ORelay issued a redirect; they do not confirm delivery to the worktree.
+
+Framework logs, exception details, scopes, callback query values, and destination paths are excluded from file output. If file logging is unavailable, ORelay emits a fixed warning to stderr and keeps running; later writes retry. The service account must be able to create and write the `logs` directory.
+
+Commands that can change state also append to these files: `init`, `setup`, `config set`, `config clear`, `doctor --fix`, `install`, `update`, and service actions other than `status`. Entries record the operation, start, completion or failure, exit code, and elapsed time. Completion means the command returned successfully; it does not imply that settings changed, since setup can be skipped or cancelled. Manual installs and updates include replacement events, versions, whether the executable changed, and a safe error code. Raw arguments, configuration values, paths, and command output are not copied into the log.
+
+Read-only commands such as `config get`, `doctor` without `--fix`, `service status`, and `update --check` do not create or append logs. Help, version output, and commands rejected by argument parsing also stay quiet. A foreground server keeps its normal server logs.
 
 ## Doctor
 
@@ -163,7 +173,7 @@ Both bootstrap scripts require release `0.2.0` or later. The PowerShell script r
 
 Rollback handles failures detected by the updater. A forced termination or power loss between the file moves can interrupt recovery. If the executable is missing afterward, check its directory for `<executable>.backup-*` and restore the previous executable to its original name before restarting the service.
 
-For automatic service updates, set `autoUpdate` to `true` and optionally set `autoUpdateIntervalSeconds` in the service's selected configuration file. The running service applies valid changes to its update schedule automatically; see [live configuration](#live-configuration) for rejected changes and interval timing. Checks use the same stable-release feed, checksum validation, version checks, and rollback as `update`. Disabled configurations and foreground servers do not start automatic workers. A missing or invalid configuration prevents an automatic update.
+Automatic service updates run every three hours by default. Set `autoUpdate` to `false` to disable them, or set `autoUpdateIntervalSeconds` in the service's selected configuration file to choose another interval. Existing saved values remain in effect until changed or cleared. The running service applies valid changes to its update schedule automatically; see [live configuration](#live-configuration) for rejected changes and interval timing. Checks use the same stable-release feed, checksum validation, version checks, and rollback as `update`. Disabled configurations and foreground servers do not start automatic workers. A missing or invalid configuration prevents an automatic update.
 
 The worker runs independently so it can finish replacing and restarting the relay after the relay stops. It uses the service account's permissions on Windows. Linux uses a separate transient systemd service and requires systemd 254 or later with permission to launch it. Neither platform prompts for elevation. Permission, network, or validation failures leave callback serving active and are retried after the interval.
 

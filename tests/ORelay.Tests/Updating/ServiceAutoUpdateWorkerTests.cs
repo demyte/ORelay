@@ -19,6 +19,7 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal(0, fixture.CheckCalls);
         Assert.Equal(0, fixture.UpdateCalls);
         Assert.Equal("disabled", fixture.Status());
+        Assert.Contains("reason=disabled-in-configuration", File.ReadAllText(fixture.LogFile));
     }
 
     [Fact]
@@ -35,6 +36,7 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal(1, fixture.CheckCalls);
         Assert.Equal(0, fixture.UpdateCalls);
         Assert.Equal("up-to-date", fixture.Status());
+        Assert.Contains("Automatic update completed: up-to-date", File.ReadAllText(fixture.LogFile));
     }
 
     [Fact]
@@ -53,6 +55,12 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal(fixture.Executable, fixture.Services.LastRequest.ExecutablePath);
         Assert.Equal("updated", fixture.Status());
         Assert.True(fixture.ResultTimestamp() <= DateTimeOffset.UtcNow);
+        var log = File.ReadAllText(fixture.LogFile);
+        Assert.Contains("Checking the stable release feed", log);
+        Assert.Contains("Installing automatic update from 1.0.0 to 2.0.0", log);
+        Assert.Contains("Automatic update completed: updated", log);
+        Assert.Contains("reason=installed, service=orelay-test, current=1.0.0, latest=2.0.0, elapsed=", log);
+        Assert.Contains($"[pid {Environment.ProcessId}]", log);
     }
 
     [Fact]
@@ -70,6 +78,7 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal("failed", fixture.Status());
         Assert.Contains("The release is unavailable.", File.ReadAllText(fixture.ResultFile));
         Assert.Contains("ReleaseUnavailable", File.ReadAllText(fixture.ResultFile));
+        Assert.Contains("Automatic update failed: release-check-failed; error=ReleaseUnavailable", File.ReadAllText(fixture.LogFile));
     }
 
     [Fact]
@@ -84,6 +93,9 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal(3, exit);
         Assert.Equal(0, fixture.UpdateCalls);
         Assert.DoesNotContain("synthetic secret", File.ReadAllText(fixture.ResultFile));
+        var log = File.ReadAllText(fixture.LogFile);
+        Assert.Contains("Automatic update failed: unexpected-release-check-failure", log);
+        Assert.DoesNotContain("synthetic secret", log);
     }
 
     [Fact]
@@ -100,6 +112,7 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal("failed", fixture.Status());
         Assert.Contains("Rollback needs manual recovery", File.ReadAllText(fixture.ResultFile));
         Assert.Contains("InstallFailure", File.ReadAllText(fixture.ResultFile));
+        Assert.Contains("Automatic update failed: installation-failed; error=InstallFailure", File.ReadAllText(fixture.LogFile));
     }
 
     [Fact]
@@ -160,6 +173,25 @@ public sealed class ServiceAutoUpdateWorkerTests
         Assert.Equal("failed", fixture.Status());
     }
 
+    [Theory]
+    [InlineData(false, "configuration-missing")]
+    [InlineData(true, "configuration-InvalidJson")]
+    public async Task UnreadableConfigurationLogsSafeReasonWithoutNetwork(bool malformed, string reason)
+    {
+        using var fixture = new Fixture();
+        if (malformed) File.WriteAllText(fixture.Config, "{synthetic-secret-invalid-json");
+
+        var exit = await fixture.RunAsync();
+
+        Assert.Equal(3, exit);
+        Assert.Equal(0, fixture.CheckCalls);
+        Assert.Equal(0, fixture.UpdateCalls);
+        var log = File.ReadAllText(fixture.LogFile);
+        Assert.Contains("Automatic update failed: " + reason, log);
+        Assert.Contains("service=orelay-test", log);
+        Assert.DoesNotContain("synthetic-secret", log);
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "orelay-auto-update-" + Guid.NewGuid().ToString("N"));
@@ -167,6 +199,7 @@ public sealed class ServiceAutoUpdateWorkerTests
         public string Executable => Path.Combine(_directory, "orelay.exe");
         public string Config => Path.Combine(_directory, "settings.json");
         public string ResultFile => ServiceAutoUpdateWorker.ResultPath(Config);
+        public string LogFile => Path.Combine(_directory, "logs", "orelay.log");
         public FakeService Services { get; } = new();
         public int CheckCalls { get; private set; }
         public int UpdateCalls { get; private set; }
