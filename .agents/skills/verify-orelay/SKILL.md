@@ -21,7 +21,7 @@ Run the verification helper:
 pwsh -NoProfile -File .\.agents\skills\verify-orelay\scripts\verify.ps1
 ```
 
-The default executable is `artifacts/publish/<runtime-identifier>/orelay.exe` under the repository root, with `win-x64` as the default runtime identifier. Pass `-RuntimeIdentifier` or `-ExecutablePath` when checking another published artifact. The helper selects free loopback ports, creates a run-owned configuration, starts the executable in the foreground, waits for `GET /health` to return `{"identity":"orelay","status":"ok"}`, and stops the exact processes it started.
+The default executable is `artifacts/publish/<runtime-identifier>/orelay.exe` on Windows and `orelay` on Unix, with `win-x64` as the default runtime identifier. Pass `-RuntimeIdentifier` or `-ExecutablePath` when checking another published artifact on its matching host. The helper selects free loopback ports, creates a run-owned configuration, starts the executable in the foreground, waits for `GET /health` to identify a healthy ORelay, runs read-only doctor, and stops the exact processes it started.
 
 The relay serves `POST /registrations`, `PUT /registrations/{id}/lease`, `DELETE /registrations/{id}`, `GET /callback`, and `GET /health`. The helper uses synthetic callback values only. A callback listener accepts the redirected request and compares its raw request target with the original raw query.
 
@@ -37,6 +37,14 @@ $config = (Resolve-Path .\work\verification\<run-id>\orelay.json).Path
 The selected file must already exist, and its saved port must identify the owned relay process. This command reads the configuration and probes `/health`; it must not create or rewrite the selected file. The complete helper run is a separate proof. It records the structured report, compares the selected configuration hash before and after doctor, then runs doctor against another missing run-owned path and expects exit code `1` without creating that file. `doctor --fix` is not part of this routine because it writes configuration. Test it separately against a disposable path and retain its output.
 
 If doctor reports an occupied port or an unreachable health endpoint, first check the recorded process ID and port in the evidence directory. Never stop a process by the `orelay` process name. The helper only stops the `Process` instances it started.
+
+Both maintained helpers run `scripts/doctor.ps1` before driving each fresh relay process. It captures the native command, exit code, stdout, stderr, and configuration hashes. Doctor cannot accept setting flags. When a test uses invocation overrides or synthetic advertised DNS names, the helper creates a disposable diagnostic copy targeting the observed loopback listener and deletes that copy afterward. This does not change the watched file or prove external hostname reachability; the diagnostic settings are recorded in evidence. The reload helper also captures expected doctor failures for invalid and missing files and rechecks the recovered listener after a rejected bind. An unexpected failure ends the drive and triggers cleanup; investigate its retained evidence before starting a fresh run.
+
+To reuse the same read-only check in a manual owned session:
+
+```powershell
+& ./.agents/skills/verify-orelay/scripts/doctor.ps1 -ExecutablePath <absolute-executable> -ConfigPath <owned-config> -EvidencePath <existing-evidence-directory>/doctor.json
+```
 
 ## Drive
 
@@ -54,7 +62,8 @@ It proves the following user paths through the public executable:
 4. The short lease expires one registration. The other stays alive after a renewal, then deletion is proved idempotent and stops routing.
 5. Read-only doctor reports a healthy owned instance without changing its configuration and reports a missing selected file without creating it.
 6. The SQLite registration file preserves live registrations, renewals, and deletions across killed relay processes. A lease that expires during downtime stays expired, and a second configuration uses an independent database.
-7. The separate `verify-reload.ps1` helper changes hostname, lease, capacity, port, bind, and callback path without replacing the relay process. Invalid or missing files keep the last applied settings, and an occupied listener target restores the prior listener before a corrected file applies.
+
+The separate `verify-reload.ps1` helper changes hostname, lease, capacity, port, bind, and callback path without replacing the relay process. Invalid or missing files keep the last applied settings, and an occupied listener target restores the prior listener before a corrected file applies.
 
 For focused checks, use the repository scripts and the public test projects:
 

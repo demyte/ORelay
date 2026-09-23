@@ -19,6 +19,8 @@ The package check extracts the actual `.nupkg`, checks its identity, version, re
 
 Publish the current Windows executable with `scripts/publish.ps1` and compare `orelay --version --json` with `scripts/get-version.ps1`. On Windows, inspect `FileVersionInfo` for the native executable. The native CI workflow performs version checks on every RID and retains the output with its existing execution evidence.
 
+Capture the package verifier's stdout, stderr, and exit code under the run's evidence directory; it removes its scratch directory and does not retain a separate report itself. On Windows, record executable stamps with `[Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path artifacts/publish/win-x64/orelay.exe).Path) | Select-Object FileVersion, ProductVersion`.
+
 ## External proof
 
 Creating a real version tag starts publication. Do this only when the user requests a release of that version. After a release, confirm all six native jobs, inspect uploaded checksums, download the package from `https://nuget.pkg.github.com/demyte/index.json`, and build a consumer with the required feed credentials. If no release was requested, report publication as unverified instead of creating a test release.

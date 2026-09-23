@@ -10,15 +10,15 @@ Run `dotnet test tests/ORelay.Tests --filter FullyQualifiedName~ServiceAutoUpdat
 
 Run `.agents/skills/verify-orelay/scripts/verify.ps1 -CheckAutoUpdate` against the published executable to exercise saved settings and foreground suppression across a full 60-second interval, then the normal CLI/HTTP suite. It also drives the internal worker with disabled config and a unique nonexistent service to prove refusal and result-file serialization. This check uses only run-owned configuration and processes, with its usual retained evidence and cleanup.
 
-Use the disposable Windows/Linux CI service smoke for the actual timer, independent worker, automatic replacement, and callback continuity. The fixture builder injects `ServiceAutoUpdateFixtureHandler` only into a copied source tree. It supplies controlled release metadata, archive bytes, and checksums without contacting GitHub. The smoke waits past a saved 60-second interval with updates disabled, enables updates and proves a failed candidate rolls back, then removes the fixture's startup-failure marker and proves the next scheduled update succeeds. It checks exact executable hashes, config preservation, service health, and the existing callback after both attempts. Do not run privileged service fixtures on the user's installed service. Record service-manager paths that were not exercised as unverified, even when the unit tests and foreground proof pass.
+Use the disposable Windows/Linux CI service smoke for the actual timer, independent worker, automatic replacement, and callback continuity. The fixture builder injects `ServiceAutoUpdateFixtureHandler` only into a copied source tree. It supplies controlled release metadata, archive bytes, and checksums without contacting GitHub. The smoke waits past a saved 60-second interval with updates disabled, sets an 86400-second interval, enables updates, then shortens the interval to 60 seconds without restarting the service. It proves that the overdue check attempts an update and rolls back a failed candidate, then removes the fixture's startup-failure marker and proves the next scheduled update succeeds. It checks exact executable hashes, config preservation, service health, and the existing callback after both attempts. Do not run privileged service fixtures on the user's installed service. Record service-manager paths that were not exercised as unverified, even when the unit tests and foreground proof pass.
 
 ## Source and commands
 
 `install.ps1` and `install.sh` select a native release, verify its checksum, and invoke the downloaded executable's `install` command. After a successful install, they run `setup --if-needed` from the installed executable when a console is available. `-Defaults` or `--defaults` runs setup unattended with `--defaults --yes`; `-SkipSetup` or `--skip-setup` prints the installed path and setup arguments for later use. The two flags cannot be combined. `src/ORelay/Updating` owns release discovery, downloads, extraction, executable replacement, and rollback. `CliParser` exposes `install`, `setup`, `update`, `--check`, and the explicit service restart flags.
 
 ```text
-orelay install --install-dir <run-owned-directory> --json
-orelay update --check --json
+orelay --config-file <run-owned-config> install --install-dir <run-owned-directory> --name <run-owned-service> --json
+orelay --config-file <run-owned-config> update --check --name <run-owned-service> --json
 orelay --config-file <run-owned-config> update --restart-service --name <run-owned-service> --json
 ```
 
@@ -47,7 +47,7 @@ Both fixtures check `-AddToPath`/`--add-to-path` and `-SkipPath`/`--skip-path` f
 
 ## Native proof
 
-Install the current executable into a fresh run-owned directory. Check `--version --json`, compare source and installed SHA-256, and repeat installation to prove the no-change result. Keep a config and database beside the target and verify their bytes survive replacement. Test directory names containing spaces. Verify an invalid target fails without overwriting unrelated files.
+Install the current executable into a fresh run-owned directory. Pass a unique `--name` even for a foreground install or read-only update check. Installation inspects service ownership, so the default name can conflict with an existing service whose executable or config path differs. Check `--version --json`, compare source and installed SHA-256, and repeat installation to prove the no-change result. Keep a config and database beside the target and verify their bytes survive replacement. Test directory names containing spaces. Verify an invalid target fails without overwriting unrelated files.
 
 Run `.github/workflows/install-safety-smoke.ps1 -ExecutablePath <published-executable> -RunRoot <run-owned-directory> -Rid <rid>`. It creates and checks a harmless marker-writing executable, then proves native installation rejects that unrelated destination without executing it or changing its hash. Windows compiles only this authored fixture with Windows PowerShell 5.1; Unix uses an authored shell script. The native workflow runs this check on all six RIDs.
 

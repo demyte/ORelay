@@ -261,6 +261,7 @@ function Wait-ForHealth {
         [Parameter(Mandatory = $true)]$Process
     )
 
+    $health = $null
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         if ($Process.HasExited) {
             throw "Relay process $($Process.Id) exited before health became ready with code $($Process.ExitCode)."
@@ -273,7 +274,7 @@ function Wait-ForHealth {
             if ([int]$response.StatusCode -eq 200) {
                 $health = $body | ConvertFrom-Json
                 if ($health.identity -eq 'orelay' -and $health.status -eq 'ok') {
-                    return $health
+                    break
                 }
             }
         }
@@ -283,7 +284,16 @@ function Wait-ForHealth {
         Start-Sleep -Milliseconds 250
     }
 
-    throw "Relay did not become ready at $Url."
+    if ($null -eq $health -or $health.identity -ne 'orelay' -or $health.status -ne 'ok') {
+        throw "Relay did not become ready at $Url."
+    }
+    $launchArguments = $Process.StartInfo.ArgumentList
+    $selectedConfig = $launchArguments[$launchArguments.IndexOf('--config-file') + 1]
+    $target = [Uri]$Url
+    $doctorEvidence = Join-Path $script:EvidenceRoot "doctor-ready-$($Process.Id)-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).json"
+    [void](& "$PSScriptRoot/doctor.ps1" -ExecutablePath $script:ExecutablePath -ConfigPath $selectedConfig `
+        -ListenerPort $target.Port -ListenerHostname $target.Host -EvidencePath $doctorEvidence)
+    return $health
 }
 
 function Start-CallbackListener {
@@ -415,7 +425,8 @@ function Get-CallbackResponse {
 $scriptRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..\..')).Path
 Assert-SafePathSegment -Value $RuntimeIdentifier -Name 'RuntimeIdentifier'
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
-    $ExecutablePath = Join-Path $scriptRoot "artifacts\publish\$RuntimeIdentifier\orelay.exe"
+    $executableName = if ([System.OperatingSystem]::IsWindows()) { 'orelay.exe' } else { 'orelay' }
+    $ExecutablePath = Join-Path $scriptRoot "artifacts/publish/$RuntimeIdentifier/$executableName"
 }
 $script:ExecutablePath = [System.IO.Path]::GetFullPath($ExecutablePath)
 if (-not (Test-Path -LiteralPath $script:ExecutablePath -PathType Leaf)) {
@@ -767,14 +778,17 @@ catch {
     Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'failure.json') -Value $failure
 }
 finally {
+    $allExited = $true
     foreach ($server in @($script:OwnedServers | Sort-Object Pid -Descending)) {
         try {
             if (-not $server.Process.HasExited) {
                 Stop-OwnedServer -Entry $server
             }
-            $server.Process.Dispose()
+            if ($server.Process.HasExited) { $server.Process.Dispose() }
+            else { $allExited = $false }
         }
         catch {
+            $allExited = $false
             Write-JsonFile -Path (Join-Path $script:EvidenceRoot "cleanup-server-$($server.Pid)-error.json") -Value ([ordered]@{ message = $_.Exception.Message })
         }
     }
@@ -804,12 +818,18 @@ finally {
         scratchPath = $script:ScratchRoot
         ownedProcessIds = @($script:OwnedServers | ForEach-Object { $_.Pid })
         ownedListenerCount = $script:OwnedListeners.Count
+        allOwnedRelaysExited = $allExited
+        scratchRemoved = $false
     })
 
     $safeScratchRoot = Resolve-ChildPath -Child $script:ScratchRoot -Parent $script:WorkVerificationRoot -Name 'Scratch path'
-    if (Test-Path -LiteralPath $safeScratchRoot) {
+    if ($allExited -and (Test-Path -LiteralPath $safeScratchRoot)) {
         Remove-Item -LiteralPath $safeScratchRoot -Recurse -Force
+        $cleanup = Get-Content -LiteralPath (Join-Path $script:EvidenceRoot 'cleanup.json') -Raw | ConvertFrom-Json
+        $cleanup.scratchRemoved = $true
+        $cleanup | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $script:EvidenceRoot 'cleanup.json') -Encoding utf8
     }
+    if (-not $allExited -and $null -eq $failure) { $failure = @{ message = 'An owned relay did not exit; scratch was retained. See cleanup evidence.' } }
 }
 
 if ($null -ne $failure) {

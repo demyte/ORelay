@@ -37,6 +37,8 @@ For terminal colour, run the published `server` with a disposable config and por
 
 Sources: `src/ORelay/Server/RelayServerHost.cs`, `RelayServerLog.cs`, and `RelayServerEndpoints.cs`.
 
+Lease policy, persistence, and cleanup are in `RegistrationStore.cs`, `SqliteRegistrationDatabase.cs`, and `RegistrationExpiryService.cs` in the same directory. The maintained live helper is [verify.ps1](../scripts/verify.ps1). Live policy reload is covered by [CLI and saved configuration](cli-config.md#live-configuration-reload).
+
 ## Gotchas
 
 - Loopback server mode allows loopback callback destinations. Non-loopback destinations require an effective non-loopback bind supplied in saved configuration or invocation flags.

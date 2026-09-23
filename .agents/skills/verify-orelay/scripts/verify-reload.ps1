@@ -139,6 +139,7 @@ function Read-ProcessOutput {
 
 function Wait-Health {
     param([System.Net.Http.HttpClient]$Client, [string]$Url, $Relay, [int]$TimeoutSeconds = 30)
+    $health = $null
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         if ($Relay.Process.HasExited) { throw "Owned relay $($Relay.Pid) exited with code $($Relay.Process.ExitCode) before health at $Url." }
@@ -146,13 +147,20 @@ function Wait-Health {
             $result = Invoke-Http -Client $Client -Method 'GET' -Url "$Url/health" -Body $null -EvidenceName 'health-probe'
             if ($result.Status -eq 200) {
                 $health = $result.Body | ConvertFrom-Json
-                if ($health.identity -eq 'orelay' -and $health.status -eq 'ok') { return $health }
+                if ($health.identity -eq 'orelay' -and $health.status -eq 'ok') { break }
             }
         }
         catch { }
         Start-Sleep -Milliseconds 250
     }
-    throw "Owned relay $($Relay.Pid) did not report the expected health identity at $Url within $TimeoutSeconds seconds."
+    if ($null -eq $health -or $health.identity -ne 'orelay' -or $health.status -ne 'ok') {
+        throw "Owned relay $($Relay.Pid) did not report the expected health identity at $Url within $TimeoutSeconds seconds."
+    }
+    $target = [Uri]$Url
+    [void](& "$PSScriptRoot/doctor.ps1" -ExecutablePath $script:ExecutablePath -ConfigPath $Relay.ConfigPath `
+        -ListenerPort $target.Port -ListenerHostname '127.0.0.1' `
+        -EvidencePath (Join-Path $script:EvidenceRoot "doctor-ready-$($Relay.Pid)-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).json"))
+    return $health
 }
 
 function Read-Config {
@@ -405,6 +413,11 @@ try {
     [System.IO.File]::WriteAllText($mainConfigPath, '{ invalid json', [System.Text.UTF8Encoding]::new($false))
     Write-Evidence -Name 'invalid-json-written' -Value ([ordered]@{ path = $mainConfigPath; sha256 = (Get-FileHash -LiteralPath $mainConfigPath -Algorithm SHA256).Hash })
     Start-Sleep -Seconds 3
+    [void](& "$PSScriptRoot/doctor.ps1" -ExecutablePath $script:ExecutablePath -ConfigPath $mainConfigPath `
+        -ExpectedExitCode 1 -EvidencePath (Join-Path $script:EvidenceRoot 'doctor-invalid-config.json'))
+    $invalidHealth = Invoke-Http -Client $client -Method 'GET' -Url "$(Get-BaseUrl $mainPort)/health" -Body $null -EvidenceName 'health-with-invalid-config'
+    Assert-Equal $invalidHealth.Status 200 'Invalid configuration stopped the active relay.'
+    Assert-Equal (($invalidHealth.Body | ConvertFrom-Json).identity) 'orelay' 'Active listener lost its identity after an invalid edit.'
     $invalidRenew = Renew-Registration -Client $client -BaseUrl (Get-BaseUrl $mainPort) -Id $renewId
     Assert-Equal $invalidRenew.relayCallbackUrl $cliCallback 'Malformed JSON changed the active callback URL.'
     Assert-Equal $invalidRenew.leaseSeconds 60 'Malformed JSON changed the active lease policy.'
@@ -459,6 +472,7 @@ try {
     $mainConfig.hostname = "rejected-${hostSuffix}.test"
     Save-Config -Path $mainConfigPath -Config $mainConfig -Reason 'request occupied port with a hostname change'
     Start-Sleep -Seconds 11
+    $null = Wait-Health -Client $client -Url (Get-BaseUrl $portAfterReload 'localhost') -Relay $relay
     $oldHealth = Invoke-Http -Client $client -Method 'GET' -Url "$(Get-BaseUrl $portAfterReload 'localhost')/health" -Body $null -EvidenceName 'health-after-rejected-listener'
     Assert-Equal $oldHealth.Status 200 'Old listener did not recover after rejecting an occupied port.'
     Assert-Equal $relay.Process.Id $relay.Pid 'Relay process identity changed after listener rejection.'
@@ -483,6 +497,8 @@ try {
     [System.IO.File]::Move($mainConfigPath, $heldPath)
     Write-Evidence -Name 'configuration-file-removed' -Value ([ordered]@{ path = $mainConfigPath; heldPath = $heldPath })
     Start-Sleep -Seconds 3
+    [void](& "$PSScriptRoot/doctor.ps1" -ExecutablePath $script:ExecutablePath -ConfigPath $mainConfigPath `
+        -ExpectedExitCode 1 -EvidencePath (Join-Path $script:EvidenceRoot 'doctor-missing-config.json'))
     $missingHealth = Invoke-Http -Client $client -Method 'GET' -Url "$(Get-BaseUrl $targetRecovered 'localhost')/health" -Body $null -EvidenceName 'health-with-missing-config'
     Assert-Equal $missingHealth.Status 200 'Missing configuration stopped the active relay.'
     $missingRenew = Renew-Registration -Client $client -BaseUrl (Get-BaseUrl $targetRecovered 'localhost') -Id $newRegistration.id
