@@ -25,6 +25,8 @@ The package is referenced only by the AppHost. Neither API nor provider referenc
 
 When an AppHost reports a lost registration, stop beginning new flows and explicitly restart the API resource or AppHost. The resource health check and resource log explain this requirement. Restarting supplies a fresh registration ID; pending old flows fail. The sample has no mechanism for changing a running process's environment.
 
+Select `relay` in the Aspire dashboard to inspect the API's registration status, public callback, forward destination, last successful renewal, lease expiry, and renewal interval. Its console logs report successful renewals and lifecycle failures with the application name. The relay's health summarizes this AppHost's registrations; the API's health check still reports its own registration. A relationship connects the API to the relay. The relay server runs separately, so its process console is not streamed into this resource.
+
 Focused lifecycle tests run with:
 
 ```powershell

@@ -83,6 +83,8 @@ builder.AddProject<Projects.Api>("api")
 
 The AppHost registers before starting the application and injects `ORelay__RegistrationId` and `ORelay__RedirectUri`. It renews the lease even while the application is paused, and deregisters on resource or AppHost shutdown. Each registered resource has one instance; separate worktrees run separate AppHosts.
 
+In the Aspire dashboard, open the relay resource to inspect each application's registration status, callback destination, public relay callback, last successful renewal, lease expiry, and renewal interval. Resource relationships link the applications to their relay. The relay's health check summarizes its registrations, while each application's health check reports its own registration. The relay console logs registration, successful renewal, connection failures, registration loss, and cleanup, with the application name on each entry. Callback queries and OAuth values are not included.
+
 If a registration is lost, the resource reports degraded health with a restart instruction. Explicitly restart the resource or AppHost to obtain a new ID. ORelay does not restart applications automatically. See [package usage](src/ORelay.Aspire.Hosting/PACKAGE.md) and the [sample with a synthetic OAuth provider](samples/GUIDE.md).
 
 ## Shared relay

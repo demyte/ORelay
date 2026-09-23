@@ -10,14 +10,16 @@ namespace ORelay.Aspire.Hosting;
 /// <summary>A connection to a relay whose process lifetime is independent of this AppHost.</summary>
 public sealed class ORelayConnection
 {
-    internal ORelayConnection(IDistributedApplicationBuilder builder, Uri serverUrl)
+    internal ORelayConnection(IDistributedApplicationBuilder builder, Uri serverUrl, RelayDashboard dashboard)
     {
         Builder = builder;
         ServerUrl = serverUrl;
+        Dashboard = dashboard;
     }
 
     internal IDistributedApplicationBuilder Builder { get; }
     public Uri ServerUrl { get; }
+    internal RelayDashboard Dashboard { get; }
 }
 
 public static class ORelayExtensions
@@ -29,8 +31,13 @@ public static class ORelayExtensions
         ValidateUrl(serverUrl);
         if (serverUrl.AbsolutePath != "/")
             throw new ArgumentException("The relay management URL must use the root path.", nameof(serverUrl));
-        builder.AddExternalService(name, serverUrl);
-        return new(builder, serverUrl);
+        var resource = builder.AddExternalService(name, serverUrl);
+        var dashboard = new RelayDashboard(resource.Resource);
+        builder.Services.AddSingleton(dashboard);
+        var checkName = $"orelay-{name}-registrations";
+        builder.Services.AddHealthChecks().AddCheck(checkName, () => dashboard.Health);
+        resource.WithHealthCheck(checkName);
+        return new(builder, serverUrl, dashboard);
     }
 
     /// <summary>Registers an allocated HTTP endpoint and injects ORelay__RegistrationId and ORelay__RedirectUri.</summary>
@@ -51,7 +58,10 @@ public static class ORelayExtensions
             throw new InvalidOperationException("A resource can have only one ORelay registration.");
 
         var session = new RegistrationSession(new HttpClient { BaseAddress = relay.ServerUrl, Timeout = TimeSpan.FromSeconds(5) });
+        session.ResourceName = builder.Resource.Name;
+        relay.Dashboard.Add(builder.Resource.Name, session);
         builder.WithAnnotation(new ORelayAnnotation(session));
+        builder.WithAnnotation(new ResourceRelationshipAnnotation(relay.Dashboard.Resource, "Reference"));
         relay.Builder.Services.AddSingleton<IHostedService>(_ => session);
         var checkName = $"orelay-{builder.Resource.Name}";
         relay.Builder.Services.AddHealthChecks().AddCheck(checkName, () => session.Health);
@@ -64,7 +74,13 @@ public static class ORelayExtensions
             return CallbackDestination.ResolveAsync(callbackUrl is null ? builder.GetEndpoint(endpointName) : null,
                 callbackPath, callbackUrl, callbackOptions ?? new(), ct);
         }
-        void SetLogger(IServiceProvider services) => session.Logger = services.GetRequiredService<ResourceLoggerService>().GetLogger(builder.Resource);
+        void SetLogger(IServiceProvider services)
+        {
+            var loggers = services.GetRequiredService<ResourceLoggerService>();
+            session.Logger = loggers.GetLogger(builder.Resource);
+            relay.Dashboard.Connect(services);
+            session.RelayLogger = loggers.GetLogger(relay.Dashboard.Resource);
+        }
 
         builder.OnResourceEndpointsAllocated(async (_, e, ct) =>
         {

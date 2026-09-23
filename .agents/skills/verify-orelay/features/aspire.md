@@ -7,6 +7,7 @@
 - Renew from the AppHost, including while the API process is suspended.
 - Resolve the allocated callback endpoint, with explicit URL, hostname, and optional Tailscale discovery inputs.
 - Surface registration loss and require an explicit resource or AppHost restart.
+- Show per-application registration details, relationships, aggregate health, and lifecycle logs on the relay resource.
 - Exercise the package from a local NuGet artifact as well as a project reference.
 
 ## How to get to it (user POV)
@@ -42,6 +43,8 @@ dotnet test tests/ORelay.Aspire.Hosting.Tests --filter Category=AspireIntegratio
 Set `ORELAY_TEST_RELAY_BINARY` to the absolute native executable when running the real-relay restart case. The repository's existing package proof is under `.artifacts/verification/aspire-package/`. This skill does not count that proof as a new run unless the commands are executed again.
 
 The two-AppHost test also follows a callback with a valid routing ID and tampered opaque state through the relay. The worktree must return `400 invalid_state`, then the original cookie-bound flow must still complete successfully.
+
+For dashboard visibility, inspect the relay's resource snapshot and console logs through the consuming AppHost. Verify the public callback and allocated destination, application relationship, registration status, renewal interval, and expiry. Wait for an actual lease renewal and verify that the last-renewal and expiry timestamps advance and a successful-renewal log appears under the relay resource. Delete only the owned registration and verify that relay and application health become degraded with an explicit restart instruction. Restart the application and verify recovery. Multiple applications on one relay must retain separate properties and identifiable log entries. Do not include OAuth query strings, state, codes, or tokens in dashboard properties or lifecycle logs.
 
 To prove orphan cleanup after a crash, launch the sample AppHost as a separate recorded process against an owned relay with a short lease. Confirm its registration still routes after the initial lease duration, then kill only that AppHost's process tree without graceful shutdown. Leave the relay running and wait longer than one lease. The old ID must return 404. Start a fresh AppHost on the same API port, then another on a changed `--ApiPort`; each must receive a fresh ID while old IDs remain invalid. Capture process IDs, ports, timestamps, HTTP results, and final listener/process cleanup. This checks AppHost ownership failure, which suspending the API alone does not exercise.
 

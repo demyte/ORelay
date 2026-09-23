@@ -37,6 +37,22 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
         var one = await browserOne.GetFromJsonAsync<SampleSession>("/sample/session", ct);
         var two = await browserTwo.GetFromJsonAsync<SampleSession>("/sample/session", ct);
         Assert.NotEqual(one!.RegistrationId, two!.RegistrationId);
+        var notifications = first.Services.GetRequiredService<ResourceNotificationService>();
+        var relayHealth = first.Services.GetRequiredService<HealthCheckService>();
+        await WaitForAsync(() => Task.FromResult(RelayProperties(notifications).TryGetValue("api.status", out var status) && status == "Active"), ct);
+        var visible = RelayProperties(notifications);
+        Assert.Equal(new Uri(new Uri(server), "/callback").AbsoluteUri, visible["api.publicCallback"]);
+        Assert.EndsWith("/oauth/callback", visible["api.destination"], StringComparison.Ordinal);
+        Assert.NotNull(visible["api.leaseExpiry"]);
+        Assert.NotNull(visible["api.renewalInterval"]);
+        Assert.True(notifications.TryGetCurrentState("relay", out var relayEvent));
+        Assert.All(relayEvent!.Snapshot.Properties.Where(property => property.Name.StartsWith("api.", StringComparison.Ordinal)),
+            property => Assert.True(property.IsHighlighted));
+        Assert.Contains(relayEvent!.Snapshot.Relationships, relation => relation.ResourceName == "api");
+        Assert.Equal(HealthStatus.Healthy, (await relayHealth.CheckHealthAsync(ct)).Entries["orelay-relay-registrations"].Status);
+        var initialExpiry = DateTimeOffset.Parse(visible["api.leaseExpiry"]!, System.Globalization.CultureInfo.InvariantCulture);
+        await WaitForAsync(() => Task.FromResult(DateTimeOffset.Parse(RelayProperties(notifications)["api.leaseExpiry"]!, System.Globalization.CultureInfo.InvariantCulture) > initialExpiry), ct);
+        Assert.NotNull(RelayProperties(notifications)["api.lastRenewal"]);
         await Task.WhenAll(CompleteFlowAsync(browserOne, ct), CompleteFlowAsync(browserTwo, ct));
 
         // Keep the browser's legitimate flow cookie while corrupting only the opaque state suffix.
@@ -83,6 +99,8 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
         using var delete = await relay.DeleteAsync($"/registrations/{one.RegistrationId}", ct);
         delete.EnsureSuccessStatusCode();
         await WaitForAsync(async () => (await first.Services.GetRequiredService<HealthCheckService>().CheckHealthAsync(ct)).Entries["orelay-api"].Description!.Contains("Restart", StringComparison.Ordinal), ct);
+        await WaitForAsync(() => Task.FromResult(RelayProperties(notifications)["api.status"] == "Expired or lost"), ct);
+        Assert.Equal(HealthStatus.Degraded, (await relayHealth.CheckHealthAsync(ct)).Entries["orelay-relay-registrations"].Status);
         var stale = await browserOne.GetFromJsonAsync<SampleSession>("/sample/session", ct);
         Assert.Equal(one.RegistrationId, stale!.RegistrationId);
         using var callbackClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
@@ -101,6 +119,7 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
         await CompleteFlowAsync(browserOne, ct);
 
         await first.StopAsync(ct);
+        await WaitForAsync(() => Task.FromResult(RelayProperties(notifications)["api.status"] == "Stopped"), ct);
         using var stopped = await relay.PutAsync($"/registrations/{(await browserTwo.GetFromJsonAsync<SampleSession>("/sample/session", ct))!.RegistrationId}/lease", null, ct);
         Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
         await CompleteFlowAsync(browserTwo, ct);
@@ -203,6 +222,12 @@ public sealed class AppHostIntegrationTests(ITestOutputHelper output)
             try { using var response = await client.GetAsync("/health", ct); return response.IsSuccessStatusCode; }
             catch (HttpRequestException) { return false; }
         }, ct);
+    }
+
+    private static Dictionary<string, string?> RelayProperties(ResourceNotificationService notifications)
+    {
+        Assert.True(notifications.TryGetCurrentState("relay", out var relayEvent));
+        return relayEvent!.Snapshot.Properties.ToDictionary(property => property.Name, property => property.Value?.ToString(), StringComparer.Ordinal);
     }
 
     private static async Task CompleteFlowAsync(HttpClient client, CancellationToken ct)

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
+using Aspire.Hosting;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using ORelay.Aspire.Hosting;
 using Xunit;
@@ -17,7 +18,15 @@ public sealed class RegistrationLifecycleTests
         var registrations = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ => session.EnsureRegisteredAsync(new Uri("http://localhost:12001/callback"), default)));
         Assert.Single(registrations.Select(r => r.Id).Distinct());
         Assert.Equal(1, server.Posts);
+        Assert.Equal("Active", session.View.Status);
+        Assert.Equal("http://relay.test/callback", session.View.PublicCallback);
+        Assert.Equal("http://localhost:12001/callback", session.View.Destination);
+        Assert.Null(session.View.LastRenewal);
+        Assert.Equal(TimeSpan.FromSeconds(1), session.View.RenewalInterval);
+        await UntilAsync(() => session.View.LastRenewal is not null);
+        Assert.True(session.View.LeaseExpiry > registrations[0].ExpiresAt);
         await session.StopRegistrationAsync();
+        Assert.Equal("Stopped", session.View.Status);
         Assert.Empty(server.Live);
         var restarted = await session.EnsureRegisteredAsync(new Uri("http://localhost:12002/callback"), default);
         Assert.NotEqual(registrations[0].Id, restarted.Id);
@@ -35,6 +44,7 @@ public sealed class RegistrationLifecycleTests
         server.Live.Clear();
         await UntilAsync(() => session.Health.Description!.Contains("Restart", StringComparison.Ordinal));
         Assert.Equal(HealthStatus.Degraded, session.Health.Status);
+        Assert.Equal("Expired or lost", session.View.Status);
         await Assert.ThrowsAsync<InvalidOperationException>(() => session.EnsureRegisteredAsync(new Uri("http://localhost:12001/callback"), default));
         Assert.Equal(1, server.Posts);
         await session.StopRegistrationAsync();
@@ -49,7 +59,10 @@ public sealed class RegistrationLifecycleTests
         using var server = new RelayHandler { FailRenewals = true };
         using var session = NewSession(server);
         await session.EnsureRegisteredAsync(new Uri("http://localhost:12001/callback"), default);
+        await UntilAsync(() => session.View.Status == "Retrying");
+        Assert.Equal(HealthStatus.Degraded, session.Health.Status);
         await UntilAsync(() => session.Health.Description!.Contains("Restart", StringComparison.Ordinal));
+        Assert.Equal("Expired or lost", session.View.Status);
         Assert.Equal(1, server.Posts);
         await session.StopAsync(default);
     }
@@ -116,6 +129,35 @@ public sealed class RegistrationLifecycleTests
         Assert.Contains("restart", error.Message, StringComparison.Ordinal);
         Assert.Empty(server.Live);
         await session.StopAsync(default);
+    }
+
+    [Fact]
+    public async Task RelayHealthReflectsEachRegistrationAndKeepsOtherApiActive()
+    {
+        using var server = new RelayHandler();
+        using var first = NewSession(server);
+        using var second = NewSession(server);
+        using var dashboard = new RelayDashboard(new ExternalServiceResource("relay", new Uri("http://relay.test")));
+        dashboard.Add("first-api", first);
+        dashboard.Add("second-api", second);
+        Assert.Equal(HealthStatus.Degraded, dashboard.Health.Status);
+        await first.EnsureRegisteredAsync(new Uri("http://localhost:12001/callback"), default);
+        await second.EnsureRegisteredAsync(new Uri("http://localhost:12002/callback"), default);
+        Assert.Equal(HealthStatus.Healthy, dashboard.Health.Status);
+        var details = dashboard.Details;
+        Assert.Equal("http://localhost:12001/callback", details.Properties.Single(property => property.Name == "first-api.destination").Value);
+        Assert.Equal("http://localhost:12002/callback", details.Properties.Single(property => property.Name == "second-api.destination").Value);
+        Assert.All(details.Properties, property => Assert.True(property.IsHighlighted));
+        Assert.Contains(details.Relationships, relation => relation.ResourceName == "first-api");
+        Assert.Contains(details.Relationships, relation => relation.ResourceName == "second-api");
+        await first.StopRegistrationAsync();
+        Assert.Equal(HealthStatus.Degraded, dashboard.Health.Status);
+        Assert.Contains("first-api: Stopped", dashboard.Health.Description, StringComparison.Ordinal);
+        Assert.DoesNotContain("second-api: Stopped", dashboard.Health.Description, StringComparison.Ordinal);
+        server.Live.Clear();
+        await UntilAsync(() => second.View.Status == "Expired or lost");
+        Assert.Contains("Restart the affected resource", dashboard.Health.Description, StringComparison.Ordinal);
+        await second.StopAsync(default);
     }
 
     private static RegistrationSession NewSession(RelayHandler server) => new(new HttpClient(server, disposeHandler: false) { BaseAddress = new Uri("http://relay.test") });

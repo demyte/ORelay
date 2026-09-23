@@ -9,6 +9,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ORelay.Aspire.Hosting;
 
 internal sealed record Registration(string Id, string CallbackUrl, DateTimeOffset ExpiresAt, int LeaseSeconds, string RelayCallbackUrl);
+internal sealed record RegistrationView(string Status, string? PublicCallback, string? Destination,
+    DateTimeOffset? LastRenewal, DateTimeOffset? LeaseExpiry, TimeSpan? RenewalInterval);
 
 // The gate serializes registration and deletion. Cancellation interrupts renewal before stop waits for the gate.
 internal sealed class RegistrationSession(HttpClient client) : IHostedService, IDisposable
@@ -21,7 +23,12 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
     private volatile bool restartRequired;
     private volatile string healthDescription = "Waiting for endpoint allocation.";
     private volatile bool healthy;
+    private RegistrationView view = new("Waiting", null, null, null, null, null);
     internal ILogger Logger { get; set; } = NullLogger.Instance;
+    internal ILogger RelayLogger { get; set; } = NullLogger.Instance;
+    internal string ResourceName { get; set; } = "API";
+    internal Action? Changed { get; set; }
+    internal RegistrationView View => Volatile.Read(ref view);
     internal HealthCheckResult Health => healthy ? HealthCheckResult.Healthy("ORelay registration is active.") : HealthCheckResult.Degraded(healthDescription);
 
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -54,7 +61,9 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
                 throw new InvalidOperationException("ORelay registration response arrived after its lease expired. Restart the resource.");
             }
             healthy = true;
+            SetView("Active", created, null, destination);
             SessionLog.Registered(Logger);
+            SessionLog.RelayRegistered(RelayLogger, ResourceName);
             renewalCancellation = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
             renewal = RenewAsync(created, requestedAt, renewalCancellation.Token);
             return created;
@@ -96,12 +105,17 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
                     if (Stopwatch.GetTimestamp() >= deadline) { MarkLost(); return; }
                     healthy = true;
                     delay = TimeSpan.FromSeconds(Math.Min(60, renewed.LeaseSeconds / 3.0));
+                    current = renewed;
+                    SetView("Active", renewed, DateTimeOffset.UtcNow);
+                    SessionLog.Renewed(RelayLogger, ResourceName);
                 }
                 catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException && !ct.IsCancellationRequested)
                 {
                     healthy = false;
                     healthDescription = "ORelay renewal disconnected. Retrying only until the current lease expires.";
+                    SetView("Retrying", null, View.LastRenewal);
                     SessionLog.Disconnected(Logger);
+                    SessionLog.RelayDisconnected(RelayLogger, ResourceName);
                     var remainingSeconds = (deadline - Stopwatch.GetTimestamp()) / (double)Stopwatch.Frequency;
                     if (remainingSeconds <= 0) { MarkLost(); return; }
                     delay = TimeSpan.FromSeconds(Math.Min(5, remainingSeconds));
@@ -117,7 +131,26 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
         healthy = false;
         restartRequired = true;
         healthDescription = "ORelay registration lost. Restart this resource or AppHost before another authorization flow.";
+        SetView("Expired or lost", null, View.LastRenewal);
         SessionLog.Lost(Logger);
+        SessionLog.RelayLost(RelayLogger, ResourceName);
+    }
+
+    private void SetView(string status, Registration? current, DateTimeOffset? lastRenewal, Uri? destination = null)
+    {
+        var previous = View;
+        Volatile.Write(ref view, new RegistrationView(status,
+            current is null ? previous.PublicCallback : SafeUrl(current.RelayCallbackUrl),
+            destination is null ? previous.Destination : SafeUrl(destination.AbsoluteUri),
+            lastRenewal, current?.ExpiresAt ?? previous.LeaseExpiry,
+            current is null ? previous.RenewalInterval : TimeSpan.FromSeconds(Math.Min(60, current.LeaseSeconds / 3.0))));
+        Changed?.Invoke();
+    }
+
+    private static string SafeUrl(string url)
+    {
+        var builder = new UriBuilder(url) { UserName = "", Password = "", Query = "", Fragment = "" };
+        return builder.Uri.AbsoluteUri;
     }
 
     internal async Task StopRegistrationAsync()
@@ -135,10 +168,10 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
                 try
                 {
                     using var response = await client.DeleteAsync($"registrations/{Uri.EscapeDataString(registration.Id)}", timeout.Token).ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode) SessionLog.CleanupFailed(Logger);
+                    if (!response.IsSuccessStatusCode) CleanupFailed();
                 }
                 catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
-                { SessionLog.CleanupFailed(Logger); }
+                { CleanupFailed(); }
             }
             registration = null;
             renewal = null;
@@ -147,8 +180,16 @@ internal sealed class RegistrationSession(HttpClient client) : IHostedService, I
             restartRequired = false;
             healthy = false;
             healthDescription = "Resource stopped.";
+            SetView("Stopped", null, View.LastRenewal);
+            SessionLog.RelayStopped(RelayLogger, ResourceName);
         }
         finally { gate.Release(); }
+    }
+
+    private void CleanupFailed()
+    {
+        SessionLog.CleanupFailed(Logger);
+        SessionLog.RelayCleanupFailed(RelayLogger, ResourceName);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
