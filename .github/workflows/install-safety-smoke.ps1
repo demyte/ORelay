@@ -100,13 +100,14 @@ Add-Type -TypeDefinition $sourceText -OutputType ConsoleApplication -OutputAssem
             throw "Windows PowerShell fixture compilation failed with exit code $($compileResult.exitCode)."
         }
     } else {
-        @'
+        $fixtureScript = @'
 #!/bin/sh
 if [ -n "$ORELAY_PROBE_MARKER" ]; then
   printf '%s' 'fixture executed' > "$ORELAY_PROBE_MARKER"
 fi
 printf '%s\n' '{"version":"0.0.0"}'
-'@ | Set-Content -LiteralPath $fixturePath -Encoding ascii
+'@
+        [IO.File]::WriteAllText($fixturePath, $fixtureScript.Replace("`r`n", "`n") + "`n", [Text.Encoding]::ASCII)
         & chmod 755 $fixturePath
         if ($LASTEXITCODE -ne 0) { throw 'Could not mark the Unix fixture executable.' }
     }
