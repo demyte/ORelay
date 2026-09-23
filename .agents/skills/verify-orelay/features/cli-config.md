@@ -6,6 +6,7 @@
 - `init` against a selected file.
 - `config get`, `config set`, and `config clear` with JSON output.
 - Default, saved, and invocation setting precedence.
+- Opt-in service updates through `autoUpdate` and `autoUpdateIntervalSeconds`.
 - Read-only configuration checks through `doctor`.
 - `setup` defaults, custom access, review, cancellation, unattended use, and optional user PATH.
 
@@ -28,6 +29,8 @@ orelay --config-file .run\setup.json setup --defaults --yes --json
 ## Driving it with PowerShell
 
 Run `.agents/skills/verify-orelay/scripts/verify.ps1`. It first checks that a fresh `init` writes exactly the default configuration, including `hostname: localhost`, and retains that file as evidence. It then uses a new configuration under `work/verification/<run-id>`, checks saved JSON and SHA-256 state, starts a server with an invocation port override, and confirms that the override does not rewrite the saved file. It clears and restores `port` and checks the built-in default. Doctor uses a unique service name so an unrelated installed ORelay service cannot affect this foreground check.
+
+The helper also checks default `autoUpdate: false` and `autoUpdateIntervalSeconds: 86400`, saves an explicit opt-in with a 60-second interval, and rejects 59 seconds without changing the saved value. Pass `-CheckAutoUpdate` to keep its foreground server alive beyond that interval and confirm no automatic worker result appears while health and callback routing remain available. Focused configuration tests cover clearing both settings, missing fields in older configurations, malformed/null values, and preservation during unrelated edits. The service-manager proof is in [installation and updates](installation-updates.md).
 
 For native setup, publish the executable on a matching host and run `.github/workflows/setup-smoke.ps1 -ExecutablePath <absolute-executable-path> -RunRoot <run-owned-directory> -Rid <rid>`. It keeps configuration under `<run-owned-directory>/setup-smoke-state` and exit codes plus separate stdout/stderr under `<run-owned-directory>/evidence`. It checks defaults, existing-file preservation, custom LAN settings, and rejected redirected or invalid commands. It deletes only its own state directory. `.github/workflows/native-platforms.yml` runs it for all six published RIDs. These unattended checks do not prove terminal prompts, Tailscale connectivity, or service-manager installation. Focused `SetupCommandTests` drive those decisions with injected input and fake service or discovery results.
 

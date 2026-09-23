@@ -29,7 +29,9 @@ public sealed class RelayConfigurationStoreTests
               "hostname": "localhost",
               "autoDiscovery": "none",
               "leaseSeconds": 300,
-              "maxRegistrations": 1000
+              "maxRegistrations": 1000,
+              "autoUpdate": false,
+              "autoUpdateIntervalSeconds": 86400
             }
             """);
         using var actual = JsonDocument.Parse(File.ReadAllText(store.FilePath));
@@ -103,6 +105,105 @@ public sealed class RelayConfigurationStoreTests
         Assert.Equal("0.0.0.0", settings.Bind);
         Assert.DoesNotContain("\"port\"", saved, StringComparison.Ordinal);
         Assert.Contains("\"bind\": \"0.0.0.0\"", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutoUpdateSettingsDefaultPersistReloadAndClear()
+    {
+        using var fixture = new ConfigurationFixture();
+        var store = fixture.Store;
+
+        var defaults = store.Read();
+        Assert.False(defaults.AutoUpdate);
+        Assert.Equal(86_400, defaults.AutoUpdateIntervalSeconds);
+
+        store.Set("autoUpdate", "true");
+        store.Set("autoUpdateIntervalSeconds", "3600");
+
+        var reloaded = new RelayConfigurationStore(store.FilePath).Read();
+        Assert.True(reloaded.AutoUpdate);
+        Assert.Equal(3_600, reloaded.AutoUpdateIntervalSeconds);
+
+        var cleared = store.Clear("autoUpdate");
+        Assert.False(cleared.AutoUpdate);
+        Assert.Equal(3_600, cleared.AutoUpdateIntervalSeconds);
+        Assert.False(store.ReadSavedDocument()!.AutoUpdate.HasValue);
+
+        store.Clear("autoUpdateIntervalSeconds");
+        Assert.Equal(86_400, store.Read().AutoUpdateIntervalSeconds);
+    }
+
+    [Theory]
+    [InlineData("autoUpdate", "sometimes")]
+    [InlineData("autoUpdate", "null")]
+    [InlineData("autoUpdateIntervalSeconds", "59")]
+    [InlineData("autoUpdateIntervalSeconds", "2592001")]
+    [InlineData("autoUpdateIntervalSeconds", "nope")]
+    public void InvalidAutoUpdateValuesAreRejected(string key, string value)
+    {
+        using var fixture = new ConfigurationFixture();
+
+        var exception = Assert.Throws<RelayConfigurationException>(() => fixture.Store.Set(key, value));
+
+        Assert.Equal(RelayConfigurationErrorCode.InvalidValue, exception.Code);
+        Assert.Equal(key, exception.Setting);
+    }
+
+    [Theory]
+    [InlineData("autoUpdate")]
+    [InlineData("autoUpdateIntervalSeconds")]
+    public void NullAutoUpdateJsonValuesAreRejected(string key)
+    {
+        using var fixture = new ConfigurationFixture();
+        File.WriteAllText(fixture.Store.FilePath, $"{{ \"schemaVersion\": 1, \"{key}\": null }}");
+
+        var exception = Assert.Throws<RelayConfigurationException>(() => fixture.Store.Read());
+
+        Assert.Equal(RelayConfigurationErrorCode.InvalidValue, exception.Code);
+        Assert.Equal(key, exception.Setting);
+    }
+
+    [Fact]
+    public async Task ConfigCommandsExposeAutoUpdateValuesAndPreserveThemOnOtherEdits()
+    {
+        using var fixture = new ConfigurationFixture();
+        var output = new StringWriter();
+        var error = new StringWriter();
+        var configOptions = new CliOptions(CliCommand.Config, IsJson: true, fixture.Store.FilePath,
+            Config: new ConfigCommandOptions(ConfigAction.Set, "autoUpdate", "true"));
+
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(configOptions, output, error));
+        using (var setJson = JsonDocument.Parse(output.ToString()))
+        {
+            Assert.True(setJson.RootElement.GetProperty("effective").GetProperty("autoUpdate").GetBoolean());
+        }
+
+        output.GetStringBuilder().Clear();
+        var getOptions = configOptions with
+        {
+            Config = new ConfigCommandOptions(ConfigAction.Get, "autoUpdate", null),
+        };
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(getOptions, output, error));
+        using (var getJson = JsonDocument.Parse(output.ToString()))
+        {
+            Assert.True(getJson.RootElement.GetProperty("value").GetBoolean());
+        }
+
+        fixture.Store.Set("port", "14001");
+        Assert.True(fixture.Store.Read().AutoUpdate);
+
+        output.GetStringBuilder().Clear();
+        var clearOptions = configOptions with
+        {
+            Config = new ConfigCommandOptions(ConfigAction.Clear, "autoUpdate", null),
+        };
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(clearOptions, output, error));
+        using (var clearJson = JsonDocument.Parse(output.ToString()))
+        {
+            Assert.False(clearJson.RootElement.GetProperty("effective").GetProperty("autoUpdate").GetBoolean());
+        }
+        Assert.False(fixture.Store.Read().AutoUpdate);
+        Assert.Equal(14_001, fixture.Store.Read().Port);
     }
 
     [Fact]

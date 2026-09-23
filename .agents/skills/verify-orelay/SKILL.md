@@ -71,6 +71,8 @@ For versioning and release changes, follow [versions and releases](features/vers
 
 For bootstrap, installation, and self-update changes, follow [installation and updates](features/installation-updates.md). Never use the user's installed binary, service, or configuration as the update target.
 
+For automatic service-update changes, pass `-CheckAutoUpdate` to the helper for the native foreground suppression check. It adds 65 seconds while the saved opt-in is enabled. This is separate from the disposable service-manager proof described in that feature map.
+
 For setup changes, run `.github/workflows/setup-smoke.ps1` against the published executable using a run-owned `-RunRoot`. See [CLI and saved configuration](features/cli-config.md) for defaults, unattended setup, cancellation, and preservation checks. Service setup is separately exercised by the disposable Windows/Linux service smoke; the local helper never installs a service.
 
 ## Evidence

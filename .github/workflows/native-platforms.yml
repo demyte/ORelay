@@ -261,7 +261,7 @@ jobs:
             -Rid $env:RID
           if ($LASTEXITCODE -ne 0) { throw "Installer safety proof failed with exit code $LASTEXITCODE." }
 
-      - name: Exercise persistent registrations using installed executable
+      - name: Exercise persistent registrations and foreground update suppression
         shell: pwsh
         env:
           RID: ${{ matrix.rid }}
@@ -269,7 +269,7 @@ jobs:
         run: |
           pwsh -NoProfile -File .agents/skills/verify-orelay/scripts/verify.ps1 `
             -ExecutablePath (Join-Path (Join-Path $env:RUN_ROOT 'installed cli') $env:EXECUTABLE_NAME) `
-            -RuntimeIdentifier $env:RID -RunId "native-persistence-$env:RID"
+            -RuntimeIdentifier $env:RID -RunId "native-persistence-$env:RID" -CheckAutoUpdate
           if ($LASTEXITCODE -ne 0) { throw 'Persistent registration verification failed.' }
 
       - name: Assert native CLI version identity

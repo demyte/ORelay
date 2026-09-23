@@ -122,7 +122,19 @@ For a running Windows or Linux service, explicitly allow a restart and use the s
 orelay --config-file <absolute-config-path> update --restart-service --name <service-name>
 ```
 
-A short restart preserves live registrations. A lease that expires during an outage stays expired. The updater checks startup and restores the previous executable if replacement or startup fails. Automatic background installation is planned separately.
+A short restart preserves live registrations. A lease that expires during an outage stays expired. The updater checks startup and restores the previous executable if replacement or startup fails.
+
+To enable automatic updates for an installed Windows or Linux service:
+
+```text
+orelay --config-file <absolute-config-path> config set autoUpdate true
+orelay --config-file <absolute-config-path> config set autoUpdateIntervalSeconds 86400
+orelay --config-file <absolute-config-path> service restart --name <service-name>
+```
+
+Automatic updates are off by default. When enabled, the service checks for stable releases every 24 hours by default and restarts itself to apply an update. Set the interval in seconds, from `60` to `2592000`. The first check waits for that interval. Restart the service after enabling updates or changing the interval. Foreground runs never check automatically.
+
+The service account needs permission to replace the executable and restart its service. Linux also requires `systemd-run` from systemd 254 or later. The latest check or installation result is written beside the selected config, for example `orelay.auto-update.json`. To turn updates off, set `autoUpdate` to `false`. A worker rereads that setting before installation; an installation already underway finishes normally.
 
 ## Run as a service
 

@@ -231,7 +231,7 @@ public static class CliApplication
                 builder.AppendLine("  orelay config clear <key>");
                 builder.AppendLine("    [--config-file <path>] [--json]");
                 builder.AppendLine();
-                builder.AppendLine("Keys: port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations.");
+                builder.AppendLine("Keys: port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations, autoUpdate, autoUpdateIntervalSeconds.");
                 break;
         }
     }

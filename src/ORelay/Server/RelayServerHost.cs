@@ -3,10 +3,13 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting.Systemd;
+using Microsoft.Extensions.Hosting.WindowsServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Console;
 using ORelay.Configuration;
 using ORelay.Services;
+using ORelay.Updating;
 
 namespace ORelay.Server;
 
@@ -24,6 +27,7 @@ public static class RelayServerHost
         bool jsonOutput,
         string? serviceName,
         string registrationDatabasePath,
+        string? configurationPath = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -77,6 +81,18 @@ public static class RelayServerHost
         builder.Host.UseORelayServiceLifetime(serviceName);
         builder.WebHost.UseUrls($"http://{FormatBind(effectiveSettings.Bind)}:{effectiveSettings.Port}");
         builder.Services.AddRelayServer(options);
+        var isService = OperatingSystem.IsWindows() ? WindowsServiceHelpers.IsWindowsService() :
+            OperatingSystem.IsLinux() && SystemdHelpers.IsSystemdService();
+        var runtime = new NativeUpdateRuntime();
+        if (effectiveSettings.AutoUpdate && isService && runtime.IsNative)
+        {
+            if (string.IsNullOrWhiteSpace(configurationPath))
+                throw new ArgumentException("Automatic updates require the selected configuration path.", nameof(configurationPath));
+            builder.Services.AddHostedService(provider => new ServiceAutoUpdateService(
+                runtime.ProcessPath!, configurationPath, serviceName ?? ServiceIdentity.DefaultName,
+                TimeSpan.FromSeconds(effectiveSettings.AutoUpdateIntervalSeconds),
+                provider.GetRequiredService<ILogger<ServiceAutoUpdateService>>()));
+        }
 
         await using var app = builder.Build();
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(RelayServerLog.Category);

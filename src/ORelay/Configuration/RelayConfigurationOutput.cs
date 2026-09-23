@@ -24,6 +24,8 @@ internal static class RelayConfigurationOutput
         RelaySettingKey.AutoDiscovery => settings.AutoDiscovery,
         RelaySettingKey.LeaseSeconds => settings.LeaseSeconds.ToString(CultureInfo.InvariantCulture),
         RelaySettingKey.MaxRegistrations => settings.MaxRegistrations.ToString(CultureInfo.InvariantCulture),
+        RelaySettingKey.AutoUpdate => settings.AutoUpdate.ToString().ToLowerInvariant(),
+        RelaySettingKey.AutoUpdateIntervalSeconds => settings.AutoUpdateIntervalSeconds.ToString(CultureInfo.InvariantCulture),
         _ => throw new ArgumentOutOfRangeException(nameof(key), key, "Unknown relay setting."),
     };
 
@@ -36,6 +38,8 @@ internal static class RelayConfigurationOutput
         RelaySettingKey.AutoDiscovery => ParseJsonString(settings.AutoDiscovery),
         RelaySettingKey.LeaseSeconds => ParseJson(settings.LeaseSeconds.ToString(CultureInfo.InvariantCulture)),
         RelaySettingKey.MaxRegistrations => ParseJson(settings.MaxRegistrations.ToString(CultureInfo.InvariantCulture)),
+        RelaySettingKey.AutoUpdate => ParseJson(settings.AutoUpdate ? "true" : "false"),
+        RelaySettingKey.AutoUpdateIntervalSeconds => ParseJson(settings.AutoUpdateIntervalSeconds.ToString(CultureInfo.InvariantCulture)),
         _ => throw new ArgumentOutOfRangeException(nameof(key), key, "Unknown relay setting."),
     };
 

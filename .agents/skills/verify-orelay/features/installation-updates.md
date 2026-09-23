@@ -1,5 +1,17 @@
 # Installation and self-updates
 
+## Automatic service updates
+
+`ServiceAutoUpdateService` schedules workers only when `RelayServerHost` detects a real Windows service or Linux systemd service, the executable is Native AOT, and saved `autoUpdate` is true. `autoUpdateIntervalSeconds` defaults to 86400, with a range of 60 to 2592000. The first check waits for the interval. Enabling or changing the interval requires a service restart. The worker reads the opt-in again before calling the update engine. A foreground `server` invocation must never auto-update.
+
+`ServiceAutoUpdateLauncher` starts an independent Windows process or a transient systemd service. Linux requires systemd 254 or later for `--expand-environment=no`; the transient service must survive stopping the relay's cgroup. `ServiceAutoUpdateWorker` checks the exact native executable, config path, and owned running service before contacting the stable release feed. It records the last result in `<config-stem>.auto-update.json`, uses a separate check lock, and reuses `UpdateEngine` for checksum verification, replacement, restart, and rollback. No provider credentials are needed.
+
+Run `dotnet test tests/ORelay.Tests --filter FullyQualifiedName~ServiceAutoUpdate` for timer ordering, retries, opt-out, service ownership, failed checks, worker arguments, and serialization. These tests inject service and release operations and do not establish native restart behavior.
+
+Run `.agents/skills/verify-orelay/scripts/verify.ps1 -CheckAutoUpdate` against the published executable to exercise saved settings and foreground suppression across a full 60-second interval, then the normal CLI/HTTP suite. It also drives the internal worker with disabled config and a unique nonexistent service to prove refusal and result-file serialization. This check uses only run-owned configuration and processes, with its usual retained evidence and cleanup.
+
+Use the disposable Windows/Linux CI service smoke for the actual timer, independent worker, automatic replacement, and callback continuity. The fixture builder injects `ServiceAutoUpdateFixtureHandler` only into a copied source tree. It supplies controlled release metadata, archive bytes, and checksums without contacting GitHub. The smoke waits past a saved 60-second interval with updates disabled, enables updates and proves a failed candidate rolls back, then removes the fixture's startup-failure marker and proves the next scheduled update succeeds. It checks exact executable hashes, config preservation, service health, and the existing callback after both attempts. Do not run privileged service fixtures on the user's installed service. Record service-manager paths that were not exercised as unverified, even when the unit tests and foreground proof pass.
+
 ## Source and commands
 
 `install.ps1` and `install.sh` select a native release, verify its checksum, and invoke the downloaded executable's `install` command. After a successful install, they run `setup --if-needed` from the installed executable when a console is available. `-Defaults` or `--defaults` runs setup unattended with `--defaults --yes`; `-SkipSetup` or `--skip-setup` prints the installed path and setup arguments for later use. The two flags cannot be combined. `src/ORelay/Updating` owns release discovery, downloads, extraction, executable replacement, and rollback. `CliParser` exposes `install`, `setup`, `update`, `--check`, and the explicit service restart flags.

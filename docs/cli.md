@@ -59,8 +59,12 @@ The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic repl
 | `autoDiscovery` | `--auto-discovery` | `none` |
 | `leaseSeconds` | `--lease-seconds` | `300` |
 | `maxRegistrations` | `--max-registrations` | `1000` |
+| `autoUpdate` | Config only | `false` |
+| `autoUpdateIntervalSeconds` | Config only | `86400` |
 
 Ports range from 1 to 65535, leases from 1 to 86400 seconds, and registration capacity from 1 to 1000000. Discovery accepts `none`, `local`, or `tailscale`. `none` and `local` use the configured listener/hostname for the relay; neither runs Tailscale.
+
+`autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Enabling updates or changing the interval requires a service restart. The first check waits for the configured interval, and subsequent checks wait until the previous worker finishes before starting another interval.
 
 For `tailscale`, an unset hostname is discovered instead of using the `localhost` default. If an existing file contains `hostname`, it remains an explicit override. Use `orelay config clear hostname` to allow discovery after selecting `tailscale`.
 
@@ -141,7 +145,13 @@ Both bootstrap scripts require release `0.2.0` or later. The PowerShell script r
 
 Rollback handles failures detected by the updater. A forced termination or power loss between the file moves can interrupt recovery. If the executable is missing afterward, check its directory for `<executable>.backup-*` and restore the previous executable to its original name before restarting the service.
 
-Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below. Updates are explicit; automatic background installation is not implemented.
+For automatic service updates, set `autoUpdate` to `true`, optionally set `autoUpdateIntervalSeconds`, then restart the named service with its original configuration path. Checks use the same stable-release feed, checksum validation, version checks, and rollback as `update`. Disabled configurations and foreground servers do not start automatic workers. A missing or invalid configuration prevents an automatic update.
+
+The worker runs independently so it can finish replacing and restarting the relay after the relay stops. It uses the service account's permissions on Windows. Linux uses a separate transient systemd service and requires systemd 254 or later with permission to launch it. Neither platform prompts for elevation. Permission, network, or validation failures leave callback serving active and are retried after the interval.
+
+The latest worker result is saved as `<config-stem>.auto-update.json` beside the selected configuration. It contains the completion time and updater result. Set `autoUpdate` to `false` to prevent further installations. Workers check the saved value again before updating; this does not interrupt installation or rollback already underway. After disabling updates, restart the service to stop its timer too.
+
+Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below.
 
 An upgrade from the original in-memory releases cannot recover their live registrations. After that first upgrade, applications must explicitly restart to register in the persistent store.
 

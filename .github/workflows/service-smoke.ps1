@@ -744,17 +744,31 @@ function Invoke-CallbackProof {
     }
 }
 
+function Get-RunOwnedServiceProcesses {
+    $target = [IO.Path]::GetFullPath($script:ServiceExecutable)
+    $comparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $backupPattern = '^' + [regex]::Escape($target) + '\.backup-[0-9a-fA-F]{32}$'
+    @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+            try {
+                $path = [IO.Path]::GetFullPath($_.Path)
+                $path.Equals($target, $comparison) -or
+                    [regex]::IsMatch($path, $backupPattern, $(if ($IsWindows) {
+                                [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                            } else { [Text.RegularExpressions.RegexOptions]::None }))
+            }
+            catch { $false }
+        })
+}
+
 function Stop-ExactServiceProcess {
     try {
-        $processes = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                try {
-                    $_.Path -eq $script:ServiceExecutable
-                }
-                catch {
-                    $false
-                }
-            })
+        $processes = @(Get-RunOwnedServiceProcesses)
         $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+        try {
+            Write-ServiceEvidence -Name 'service-owned-process-cleanup.json' -Value @(
+                $processes | ForEach-Object { [ordered]@{ Id = $_.Id; Path = $_.Path } })
+        }
+        catch { }
         return $processes.Count
     }
     catch {
@@ -764,16 +778,7 @@ function Stop-ExactServiceProcess {
 
 function Get-ExactServiceProcessCount {
     try {
-        return @(
-            Get-Process -ErrorAction SilentlyContinue | Where-Object {
-                try {
-                    $_.Path -eq $script:ServiceExecutable
-                }
-                catch {
-                    $false
-                }
-            }
-        ).Count
+        return @(Get-RunOwnedServiceProcesses).Count
     }
     catch {
         return -1
@@ -893,6 +898,54 @@ function Assert-InstallTransition {
             DatabaseExists = $true
         })
 }
+
+function Set-AutoUpdateReleaseFixture {
+    param([Parameter(Mandatory = $true)] [string]$Name,
+        [Parameter(Mandatory = $true)] [string]$Version)
+
+    $source = Join-Path $RunRoot "service-fixtures/$Name"
+    $archiveName = "orelay-$Version-$Rid" + $(if ($Rid.StartsWith('win-')) { '.zip' } else { '.tar.gz' })
+    $archive = Join-Path $source $archiveName
+    $checksum = "$archive.sha256"
+    if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $checksum -PathType Leaf)) {
+        throw "The '$Name' disposable release archive or checksum is missing."
+    }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ((Get-Content -LiteralPath $checksum -Raw).Trim() -cne "$hash  $archiveName") {
+        throw "The '$Name' disposable release checksum differs from its archive."
+    }
+    Copy-Item -LiteralPath $archive -Destination (Join-Path $script:WorkPath 'auto-update-fixture-archive') -Force
+    Copy-Item -LiteralPath $checksum -Destination (Join-Path $script:WorkPath 'auto-update-fixture-checksum') -Force
+    Set-Content -LiteralPath (Join-Path $script:WorkPath 'auto-update-fixture-version.txt') -Value $Version
+    Write-ServiceEvidence -Name "service-auto-update-$Name-release.json" -Value ([ordered]@{
+            Version = $Version; ArchiveName = $archiveName; ArchiveSha256 = $hash
+            CandidateSha256 = (Get-FileHash -LiteralPath (Join-Path $source $serviceFileName) -Algorithm SHA256).Hash
+        })
+}
+
+function Wait-AutoUpdateResult {
+    param([Parameter(Mandatory = $true)] [string]$ExpectedStatus,
+        [Parameter(Mandatory = $true)] [string]$EvidenceName)
+
+    $path = [IO.Path]::ChangeExtension($script:ConfigPath, 'auto-update.json')
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(140)
+    while ([DateTimeOffset]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            try {
+                $result = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+                if ($result.status -cne $ExpectedStatus) {
+                    throw "Scheduled update returned '$($result.status)', expected '$ExpectedStatus'."
+                }
+                Write-ServiceEvidence -Name "$EvidenceName.json" -Value $result
+                return $result
+            }
+            catch [System.IO.IOException] { }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Timed out waiting for scheduled update result '$ExpectedStatus'."
+}
 $script:ServiceExecutable = Join-Path $script:WorkPath $serviceFileName
 $script:ConfigPath = Join-Path $script:WorkPath 'service config path.json'
 if ($script:IsLinuxPlatform -and -not $script:IsRootUser -and $null -ne $script:SudoPath) {
@@ -905,6 +958,10 @@ else {
 }
 $serviceName = "orelay-ci-$([Guid]::NewGuid().ToString('N'))"
 $script:OwnedServiceName = $serviceName
+$autoUpdateIdentity = $serviceName + "`n" + [IO.Path]::GetFullPath($script:ConfigPath)
+$autoUpdateHash = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($autoUpdateIdentity))
+$script:AutoUpdateUnit = 'orelay-auto-update-' +
+    [Convert]::ToHexString([byte[]]$autoUpdateHash[0..7]).ToLowerInvariant() + '.service'
 $conflictName = "orelay-ci-conflict-$([Guid]::NewGuid().ToString('N'))"
 $script:UnprivilegedServiceName = "orelay-ci-unprivileged-$([Guid]::NewGuid().ToString('N'))"
 $script:UnitPath = if ($script:IsLinuxPlatform) {
@@ -1137,7 +1194,9 @@ try {
     Assert-ServiceResult -ActionResult $beforeFailureStatus -ExpectedState 'Running'
     $configBeforeFailure = (Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash
     $failingStartMarker = Join-Path $script:WorkPath 'failing-service-start.marker'
+    $failingEnableMarker = Join-Path $script:WorkPath 'failing-service-enable.marker'
     if (Test-Path -LiteralPath $failingStartMarker) { throw 'Failing candidate startup marker already exists.' }
+    Set-Content -LiteralPath $failingEnableMarker -Value 'fail the disposable candidate at server startup'
     $failedInstall = Invoke-PrivilegedProcess -FilePath $FailingExecutablePath -Arguments @(
         '--config-file', $script:ConfigPath,
         'install', '--install-dir', $script:WorkPath,
@@ -1177,6 +1236,99 @@ try {
             DatabaseExists = Test-Path -LiteralPath ([IO.Path]::ChangeExtension($script:ConfigPath, 'registrations.db')) -PathType Leaf
         })
 
+    Remove-Item -LiteralPath $failingStartMarker -Force
+    $autoResultPath = [IO.Path]::ChangeExtension($script:ConfigPath, 'auto-update.json')
+    if (Test-Path -LiteralPath $autoResultPath) { throw 'Automatic update produced a result while disabled.' }
+    $intervalAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdateIntervalSeconds', '60', '--json'
+    ) -EvidenceName 'service-auto-update-disabled-interval'
+    if ($intervalAuto.ExitCode -ne 0) { throw 'Could not set the minimum automatic update interval.' }
+    $disabledSettings = Get-Content -LiteralPath $script:ConfigPath -Raw | ConvertFrom-Json
+    if ($disabledSettings.autoUpdate -eq $true -or $disabledSettings.autoUpdateIntervalSeconds -ne 60) {
+        throw 'The disabled service proof does not have autoUpdate=false and a 60-second interval.'
+    }
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action restart -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-disabled-callback'
+    $disabledIdentity = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    Start-Sleep -Seconds 65
+    if (Test-Path -LiteralPath $autoResultPath) {
+        throw 'The disabled service launched an automatic update after its minimum interval.'
+    }
+    $afterDisabled = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    if ($afterDisabled.Sha256 -cne $disabledIdentity.Sha256) {
+        throw 'The disabled service executable changed during the interval proof.'
+    }
+    Write-ServiceEvidence -Name 'service-auto-update-disabled.json' -Value ([ordered]@{
+            WaitSeconds = 65; AutoUpdate = $false; IntervalSeconds = 60; ResultAbsent = $true
+            Version = $afterDisabled.Version; Sha256 = $afterDisabled.Sha256
+        })
+
+    $enableAuto = Invoke-ProcessWithEvidence -FilePath $script:ServiceExecutable -Arguments @(
+        '--config-file', $script:ConfigPath, 'config', 'set', 'autoUpdate', 'true', '--json'
+    ) -EvidenceName 'service-auto-update-enable'
+    if ($enableAuto.ExitCode -ne 0) { throw 'Could not enable automatic updates in the run-owned configuration.' }
+    $autoConfigHash = (Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash
+    Set-AutoUpdateReleaseFixture -Name 'failing' -Version $identities.Failing.Version
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action restart -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-before-failure-callback'
+    [void](Wait-AutoUpdateResult -ExpectedStatus 'failed' -EvidenceName 'service-auto-update-failed-result')
+    $fixtureRequestsPath = Join-Path $script:WorkPath 'auto-update-fixture-requests.txt'
+    $failureRequests = @(Get-Content -LiteralPath $fixtureRequestsPath)
+    if (@($failureRequests | Where-Object { $_ -ceq 'release' }).Count -lt 2 -or
+        @($failureRequests | Where-Object { $_ -ceq 'checksum' }).Count -lt 1 -or
+        @($failureRequests | Where-Object { $_ -ceq 'archive' }).Count -lt 1) {
+        throw 'The failed scheduled update did not fetch the fixture release, checksum, and archive.'
+    }
+    $failureRequests | Set-Content -LiteralPath (Join-Path $script:EvidencePath 'service-auto-update-failed-http.txt')
+    if (-not (Test-Path -LiteralPath $failingStartMarker -PathType Leaf)) {
+        throw 'The failed scheduled update did not reach candidate server startup.'
+    }
+    $afterAutoFailure = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    if ($afterAutoFailure.Version -cne $disabledIdentity.Version -or
+        $afterAutoFailure.Sha256 -cne $disabledIdentity.Sha256) {
+        throw 'A failed scheduled update did not restore the previous executable.'
+    }
+    if ((Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash -cne $autoConfigHash) {
+        throw 'A failed scheduled update changed the service configuration.'
+    }
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-failed-callback'
+    Write-ServiceEvidence -Name 'service-auto-update-failed-rollback.json' -Value ([ordered]@{
+            PreviousVersion = $disabledIdentity.Version; PreviousSha256 = $disabledIdentity.Sha256
+            RestoredVersion = $afterAutoFailure.Version; RestoredSha256 = $afterAutoFailure.Sha256
+            ConfigurationSha256 = $autoConfigHash; ServiceRunning = $true; CallbackPersisted = $true
+            CandidateReachedServerStartup = Test-Path -LiteralPath $failingStartMarker -PathType Leaf
+        })
+
+    Remove-Item -LiteralPath $failingEnableMarker -Force
+    Remove-Item -LiteralPath $autoResultPath -Force
+    [void](Wait-AutoUpdateResult -ExpectedStatus 'updated' -EvidenceName 'service-auto-update-success-result')
+    $successRequests = @(Get-Content -LiteralPath $fixtureRequestsPath)
+    if (@($successRequests | Where-Object { $_ -ceq 'checksum' }).Count -lt 2 -or
+        @($successRequests | Where-Object { $_ -ceq 'archive' }).Count -lt 2) {
+        throw 'The successful scheduled update did not fetch the fixture checksum and archive.'
+    }
+    $successRequests | Set-Content -LiteralPath (Join-Path $script:EvidencePath 'service-auto-update-success-http.txt')
+    $afterAutoSuccess = Get-ExecutableIdentity -Path $script:ServiceExecutable
+    if ($afterAutoSuccess.Version -cne $identities.Failing.Version -or
+        $afterAutoSuccess.Sha256 -cne $identities.Failing.Sha256) {
+        throw 'The scheduled update did not install the verified candidate bytes.'
+    }
+    if ((Get-FileHash -LiteralPath $script:ConfigPath -Algorithm SHA256).Hash -cne $autoConfigHash) {
+        throw 'The scheduled update changed the service configuration.'
+    }
+    Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Running'
+    Wait-RelayHealth -Client $httpClient -Port $port
+    Assert-PersistedCallback -Client $httpClient -Callback $callback -EvidenceName 'service-auto-update-success-callback'
+    Write-ServiceEvidence -Name 'service-auto-update-success.json' -Value ([ordered]@{
+            PreviousVersion = $disabledIdentity.Version; PreviousSha256 = $disabledIdentity.Sha256
+            InstalledVersion = $afterAutoSuccess.Version; InstalledSha256 = $afterAutoSuccess.Sha256
+            ConfigurationSha256 = $autoConfigHash; ServiceRunning = $true; CallbackPersisted = $true
+        })
+
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action stop -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action status -Name $serviceName) -ExpectedState 'Stopped'
     Assert-ServiceResult -ActionResult (Invoke-ServiceAction -Action uninstall -Name $serviceName) -ExpectedState 'NotInstalled'
@@ -1210,6 +1362,48 @@ finally {
     }
     $cleanupError = $null
     $finalServiceStatus = $null
+    $autoUpdateCleanup = [ordered]@{
+        Unit = $script:AutoUpdateUnit; Checked = $false; LoadState = $null
+        StopExitCode = $null; Stopped = $false; FinalActiveState = $null
+    }
+    if ($script:IsLinuxPlatform -and $ownedServiceWasInstalled) {
+        try {
+            $unitLoad = Invoke-PrivilegedProcess -FilePath 'systemctl' -Arguments @(
+                'show', $script:AutoUpdateUnit, '--property=LoadState', '--value'
+            ) -EvidenceName 'service-auto-update-cleanup-load'
+            if ($unitLoad.ExitCode -ne 0 -and $unitLoad.StandardOutput.Trim() -cne 'not-found') {
+                throw 'Could not inspect the run-owned transient update unit.'
+            }
+            $autoUpdateCleanup.Checked = $true
+            $autoUpdateCleanup.LoadState = $unitLoad.StandardOutput.Trim()
+            if ([string]::IsNullOrWhiteSpace($autoUpdateCleanup.LoadState)) {
+                throw 'The transient unit inspection returned no load state.'
+            }
+            if ($autoUpdateCleanup.LoadState -cne 'not-found') {
+                $unitStop = Invoke-PrivilegedProcess -FilePath 'systemctl' -Arguments @(
+                    'stop', $script:AutoUpdateUnit
+                ) -EvidenceName 'service-auto-update-cleanup-stop'
+                $autoUpdateCleanup.StopExitCode = $unitStop.ExitCode
+                $unitState = Invoke-PrivilegedProcess -FilePath 'systemctl' -Arguments @(
+                    'show', $script:AutoUpdateUnit, '--property=ActiveState', '--value'
+                ) -EvidenceName 'service-auto-update-cleanup-state'
+                $autoUpdateCleanup.FinalActiveState = $unitState.StandardOutput.Trim()
+                if ($autoUpdateCleanup.FinalActiveState -notin @('inactive', 'failed')) {
+                    throw "The run-owned transient update unit remained '$($autoUpdateCleanup.FinalActiveState)'."
+                }
+                $autoUpdateCleanup.Stopped = $true
+            }
+        }
+        catch {
+            $cleanupError = "Run-owned transient update unit cleanup failed: $($_.Exception.Message)"
+        }
+    }
+    try {
+        Write-ServiceEvidence -Name 'service-auto-update-cleanup.json' -Value $autoUpdateCleanup
+    }
+    catch {
+        if ($null -eq $cleanupError) { $cleanupError = "Could not write transient unit cleanup evidence: $($_.Exception.Message)" }
+    }
     if ($ownedServiceWasInstalled) {
         $ownedServiceCleanupAttempted = $true
         if ($ownedServiceInstalled) {
@@ -1245,16 +1439,30 @@ finally {
         }
     }
     $stoppedProcessCount = Stop-ExactServiceProcess
-    Write-ServiceEvidence -Name 'service-cleanup.json' -Value ([ordered]@{
-            StoppedOwnedProcessCount = $stoppedProcessCount
-            OwnedProcessCountAfterCleanup = Get-ExactServiceProcessCount
-            ServiceName = $serviceName
-            OwnedServiceWasInstalled = $ownedServiceWasInstalled
-            OwnedServiceCleanupAttempted = $ownedServiceCleanupAttempted
-            FinalServiceStatus = $finalServiceStatus
-            PrimaryError = if ($null -eq $script:PrimaryError) { $null } else { $script:PrimaryError.Message }
-            CleanupError = $cleanupError
-        })
+    $remainingProcessCount = Get-ExactServiceProcessCount
+    for ($attempt = 0; $remainingProcessCount -gt 0 -and $attempt -lt 25; $attempt++) {
+        Start-Sleep -Milliseconds 200
+        $remainingProcessCount = Get-ExactServiceProcessCount
+    }
+    if ($remainingProcessCount -ne 0 -and $null -eq $cleanupError) {
+        $cleanupError = "Run-owned service or updater processes remain after cleanup: $remainingProcessCount."
+    }
+    try {
+        Write-ServiceEvidence -Name 'service-cleanup.json' -Value ([ordered]@{
+                StoppedOwnedProcessCount = $stoppedProcessCount
+                OwnedProcessCountAfterCleanup = $remainingProcessCount
+                AutoUpdateUnit = $autoUpdateCleanup
+                ServiceName = $serviceName
+                OwnedServiceWasInstalled = $ownedServiceWasInstalled
+                OwnedServiceCleanupAttempted = $ownedServiceCleanupAttempted
+                FinalServiceStatus = $finalServiceStatus
+                PrimaryError = if ($null -eq $script:PrimaryError) { $null } else { $script:PrimaryError.Message }
+                CleanupError = $cleanupError
+            })
+    }
+    catch {
+        if ($null -eq $cleanupError) { $cleanupError = "Could not write service cleanup evidence: $($_.Exception.Message)" }
+    }
     if ($conflictDefinitionCreated) {
         try {
             if ($script:IsLinuxPlatform) {

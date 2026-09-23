@@ -30,7 +30,7 @@ public sealed class RelayConfigurationStore
     public const int CurrentSchemaVersion = 1;
 
     private static readonly string[] NonNullableSettingNames =
-    ["port", "bind", "autoDiscovery", "leaseSeconds", "maxRegistrations"];
+    ["port", "bind", "autoDiscovery", "leaseSeconds", "maxRegistrations", "autoUpdate", "autoUpdateIntervalSeconds"];
 
     private readonly TimeSpan _lockTimeout;
 
@@ -446,6 +446,12 @@ public sealed class RelayConfigurationStore
             case RelaySettingKey.MaxRegistrations:
                 document.MaxRegistrations = patch.MaxRegistrations;
                 break;
+            case RelaySettingKey.AutoUpdate:
+                document.AutoUpdate = patch.AutoUpdate;
+                break;
+            case RelaySettingKey.AutoUpdateIntervalSeconds:
+                document.AutoUpdateIntervalSeconds = patch.AutoUpdateIntervalSeconds;
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(setting), setting, "Unknown relay setting.");
         }
@@ -464,6 +470,8 @@ public sealed class RelayConfigurationStore
         AutoDiscovery = document.AutoDiscovery,
         LeaseSeconds = document.LeaseSeconds,
         MaxRegistrations = document.MaxRegistrations,
+        AutoUpdate = document.AutoUpdate,
+        AutoUpdateIntervalSeconds = document.AutoUpdateIntervalSeconds,
     };
 
     private static void TryDeleteTemporaryFile(string path)

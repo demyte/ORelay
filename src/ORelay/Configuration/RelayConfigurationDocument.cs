@@ -21,6 +21,10 @@ public sealed class RelayConfigurationDocument
 
     public int? MaxRegistrations { get; set; }
 
+    public bool? AutoUpdate { get; set; }
+
+    public int? AutoUpdateIntervalSeconds { get; set; }
+
     internal RelaySettingsPatch ToPatch() => new(
         Port,
         Bind,
@@ -28,7 +32,9 @@ public sealed class RelayConfigurationDocument
         Hostname,
         AutoDiscovery,
         LeaseSeconds,
-        MaxRegistrations);
+        MaxRegistrations,
+        AutoUpdate,
+        AutoUpdateIntervalSeconds);
 
     internal static RelayConfigurationDocument FromSettings(RelaySettings settings)
     {
@@ -44,6 +50,8 @@ public sealed class RelayConfigurationDocument
             AutoDiscovery = settings.AutoDiscovery,
             LeaseSeconds = settings.LeaseSeconds,
             MaxRegistrations = settings.MaxRegistrations,
+            AutoUpdate = settings.AutoUpdate,
+            AutoUpdateIntervalSeconds = settings.AutoUpdateIntervalSeconds,
         };
     }
 }

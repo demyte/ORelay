@@ -26,13 +26,25 @@ if ($major -eq 0 -and $minor -eq 0 -and $patch -le 1) {
 $nextVersion = "$($major + 1).0.0"
 $failingVersion = "$($major + 2).0.0"
 
-# Copy only checked-in project inputs. Fixture edits never touch the checkout.
-foreach ($relative in @(git -C $repo ls-files -- src/ORelay)) {
+# Copy tracked and new project inputs. Fixture edits never touch the checkout.
+foreach ($relative in @(git -C $repo ls-files --cached --others --exclude-standard -- src/ORelay)) {
+    if ($relative -match '(^|/)(bin|obj)/') { continue }
     $source = Join-Path $repo $relative
     $target = Join-Path $fixture $relative
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $source -Destination $target
 }
+$worker = Join-Path $fixture 'src/ORelay/Updating/ServiceAutoUpdateWorker.cs'
+$originalWorker = Get-Content -LiteralPath $worker -Raw
+$engineLine = 'var engine = new UpdateEngine(runtime: _runtime, services: _services);'
+if ([regex]::Matches($originalWorker, [regex]::Escape($engineLine)).Count -ne 1) {
+    throw 'The worker source no longer has the expected single fixture injection point.'
+}
+$fixtureWorker = $originalWorker.Replace($engineLine,
+    'var engine = new UpdateEngine(http: new HttpClient(new ServiceAutoUpdateFixtureHandler()), runtime: _runtime, services: _services, token: "disposable-ci-fixture");')
+Set-Content -LiteralPath $worker -Value $fixtureWorker
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ServiceAutoUpdateFixtureHandler.cs') `
+    -Destination (Join-Path $fixture 'src/ORelay/Updating/ServiceAutoUpdateFixtureHandler.cs')
 foreach ($name in @('Directory.Build.props', 'Directory.Build.targets', 'Directory.Packages.props', 'NuGet.Config', 'global.json')) {
     Copy-Item -LiteralPath (Join-Path $repo $name) -Destination (Join-Path $fixture $name)
 }
@@ -64,20 +76,47 @@ function Publish-Fixture([string]$Name, [string]$Version) {
 Publish-Fixture 'previous' $previousVersion
 Publish-Fixture 'next' $nextVersion
 
+function New-ReleaseFixture([string]$Name, [string]$Version) {
+    $payload = Join-Path $output $Name
+    $archiveName = "orelay-$Version-$Rid" + $(if ($Rid.StartsWith('win-')) { '.zip' } else { '.tar.gz' })
+    $archive = Join-Path $payload $archiveName
+    $executable = Join-Path $payload $ExecutableName
+    if ($Rid.StartsWith('win-')) {
+        Compress-Archive -LiteralPath $executable -DestinationPath $archive
+    }
+    else {
+        & tar -czf $archive -C $payload $ExecutableName
+        if ($LASTEXITCODE -ne 0) { throw "Could not package service fixture '$Name'." }
+    }
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    $checksum = "$archive.sha256"
+    Set-Content -LiteralPath $checksum -Value "$hash  $archiveName" -NoNewline
+    [ordered]@{ Name = $archiveName; Archive = $archive; Checksum = $checksum; Sha256 = $hash } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "service-fixture-$Name-release.json")
+}
+
 $program = Join-Path $fixture 'src/ORelay/Program.cs'
 @'
 using ORelay;
 using ORelay.Cli;
+using ORelay.Updating;
 
-// Verification-only candidate: version works, service server startup fails.
-if (args.Contains("server", StringComparer.Ordinal))
+// Verification-only candidate: startup fails only while the run-owned marker exists.
+if (args.Contains("server", StringComparer.Ordinal) &&
+    File.Exists(Path.Combine(AppContext.BaseDirectory, "failing-service-enable.marker")))
 {
     File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "failing-service-start.marker"), "server startup reached");
     return 70;
 }
+if (args.Length > 0 && string.Equals(args[0], "__auto-update", StringComparison.Ordinal))
+{
+    if (args.Length != 3) return 3;
+    return await new ServiceAutoUpdateWorker().RunAsync(args[1], args[2]);
+}
 return await CliApplication.ExecuteAsync(args, commandHandler: ApplicationCommands.ExecuteAsync);
 '@ | Set-Content -LiteralPath $program
 Publish-Fixture 'failing' $failingVersion
+New-ReleaseFixture 'failing' $failingVersion
 if ((Get-FileHash -LiteralPath $ProductionExecutablePath -Algorithm SHA256).Hash -cne $productionHash) {
     throw 'Fixture publishing changed the production executable.'
 }

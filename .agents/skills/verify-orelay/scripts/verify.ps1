@@ -2,7 +2,8 @@
 param(
     [string]$RuntimeIdentifier = 'win-x64',
     [string]$ExecutablePath = '',
-    [string]$RunId = ''
+    [string]$RunId = '',
+    [switch]$CheckAutoUpdate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -471,12 +472,28 @@ try {
         autoDiscovery = 'none'
         leaseSeconds = 300
         maxRegistrations = 1000
+        autoUpdate = $false
+        autoUpdateIntervalSeconds = 86400
     }
     Assert-Equal @($defaults.PSObject.Properties).Count $expectedDefaults.Count 'Default configuration has unexpected fields.'
     foreach ($entry in $expectedDefaults.GetEnumerator()) {
         Assert-Equal $defaults.($entry.Key) $entry.Value "Unexpected default setting: $($entry.Key)"
     }
     Copy-Item -LiteralPath $defaultsPath -Destination (Join-Path $script:EvidenceRoot 'default-config.json')
+
+    if ($CheckAutoUpdate) {
+        $workerServiceName = 'orelay-worker-verify-' + [Guid]::NewGuid().ToString('N')
+        [void](Invoke-Native -Arguments @('__auto-update', $defaultsPath, $workerServiceName) -EvidenceName 'auto-update-worker-disabled')
+        $workerResultPath = [System.IO.Path]::ChangeExtension($defaultsPath, 'auto-update.json')
+        $disabledResult = Get-Content -Raw -LiteralPath $workerResultPath | ConvertFrom-Json
+        Assert-Equal $disabledResult.status 'disabled' 'Disabled native worker did not refuse the update.'
+        Copy-Item -LiteralPath $workerResultPath -Destination (Join-Path $script:EvidenceRoot 'auto-update-worker-disabled-result.json')
+        [void](Invoke-Native -Arguments @('--config-file', $defaultsPath, 'config', 'set', 'autoUpdate', 'true') -EvidenceName 'auto-update-worker-enable')
+        [void](Invoke-Native -Arguments @('__auto-update', $defaultsPath, $workerServiceName) -EvidenceName 'auto-update-worker-missing-service' -ExpectedExitCode 3)
+        $missingServiceResult = Get-Content -Raw -LiteralPath $workerResultPath | ConvertFrom-Json
+        Assert-Equal $missingServiceResult.status 'failed' 'Native worker did not reject the missing service.'
+        Copy-Item -LiteralPath $workerResultPath -Destination (Join-Path $script:EvidenceRoot 'auto-update-worker-missing-service-result.json')
+    }
 
     $relayPort = Get-FreePort
     $overridePort = Get-FreePort
@@ -504,6 +521,13 @@ try {
     Assert-Equal $defaultPortJson.value 12987 'Clearing port did not restore the built-in default.'
     [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'port', [string]$relayPort, '--json') -EvidenceName 'config-restore-port')
 
+    [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdate', 'true', '--json') -EvidenceName 'config-auto-update-on')
+    [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateIntervalSeconds', '60', '--json') -EvidenceName 'config-auto-update-interval')
+    [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateIntervalSeconds', '59', '--json') -EvidenceName 'config-auto-update-invalid' -ExpectedExitCode 3)
+    $autoConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    Assert-Equal $autoConfig.autoUpdate $true 'Automatic update opt-in was not saved.'
+    Assert-Equal $autoConfig.autoUpdateIntervalSeconds 60 'Invalid interval changed the saved setting.'
+
     $overrideServer = Start-OwnedServer -ConfigPath $configPath -Port $overridePort -EvidencePrefix 'server-override'
     $httpHandler = [System.Net.Http.HttpClientHandler]::new()
     $httpHandler.AllowAutoRedirect = $false
@@ -519,6 +543,25 @@ try {
     $relayServer = Start-OwnedServer -ConfigPath $configPath -Port $relayPort -EvidencePrefix 'server-relay'
     $health = Wait-ForHealth -Client $http -Url "$relayBase/health" -Process $relayServer.Process
     Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'health.json') -Value $health
+
+    if ($CheckAutoUpdate) {
+        # Keep this longer check opt-in so ordinary callback feedback stays fast.
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($watch.Elapsed.TotalSeconds -lt 65) {
+            Start-Sleep -Seconds 1
+            Assert-True (-not $relayServer.Process.HasExited) 'Foreground server exited during the auto-update interval.'
+        }
+        $updateResult = [System.IO.Path]::ChangeExtension($configPath, 'auto-update.json')
+        Assert-True (-not (Test-Path -LiteralPath $updateResult)) 'Foreground server ran an automatic update worker.'
+        $foregroundHealth = Wait-ForHealth -Client $http -Url "$relayBase/health" -Process $relayServer.Process
+        Write-JsonFile -Path (Join-Path $script:EvidenceRoot 'auto-update-foreground.json') -Value ([ordered]@{
+            elapsedSeconds = $watch.Elapsed.TotalSeconds
+            savedEnabled = $true
+            savedIntervalSeconds = 60
+            workerResultExists = $false
+            health = $foregroundHealth
+        })
+    }
 
     $doctorBeforeHash = (Get-FileHash -LiteralPath $configPath -Algorithm SHA256).Hash
     $doctorServiceName = 'orelay-verify-' + [Guid]::NewGuid().ToString('N')

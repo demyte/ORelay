@@ -187,6 +187,8 @@ public static class ConfigurationCommand
             "auto-discovery" => "autoDiscovery",
             "lease-seconds" => "leaseSeconds",
             "max-registrations" => "maxRegistrations",
+            "auto-update" => "autoUpdate",
+            "auto-update-interval-seconds" => "autoUpdateIntervalSeconds",
             var value => value,
         };
 
@@ -197,7 +199,7 @@ public static class ConfigurationCommand
 
         throw new RelayConfigurationException(
             RelayConfigurationErrorCode.UnknownSetting,
-            $"Unknown setting '{key}'. Supported settings are port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, and maxRegistrations.",
+            $"Unknown setting '{key}'. Supported settings are port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations, autoUpdate, and autoUpdateIntervalSeconds.",
             setting: key);
     }
 }
