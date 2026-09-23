@@ -60,7 +60,6 @@ public sealed class UpdateEngine
             if (latest.CompareTo(local) < 0)
                 throw new UpdateException(UpdateErrorCode.Downgrade, "The latest stable release is older than this executable. No downgrade was made.");
             using var updateLock = AcquireLock(target!);
-            RejectLinkedPath(target!);
             var installedStamp = await SafeReadVersionAsync(target!, cancellationToken);
             if (installedStamp is null)
                 throw new UpdateException(UpdateErrorCode.InvalidVersion, "The installed executable did not report an ORelay version.");
@@ -102,9 +101,10 @@ public sealed class UpdateEngine
             if (string.Equals(source, target, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 return new UpdateResult(true, false, current, current, target, "ORelay is already installed at this path.");
 
+            RejectLinkedPath(target);
             Directory.CreateDirectory(directory);
             using var updateLock = AcquireLock(target);
-            RejectLinkedPath(target);
+            var sameVersion = false;
             if (File.Exists(target))
             {
                 var installedVersion = await SafeReadVersionAsync(target, cancellationToken);
@@ -112,15 +112,22 @@ public sealed class UpdateEngine
                     throw new UpdateException(UpdateErrorCode.InstallFailure, "The target contains an executable that is not ORelay.");
                 if (installed!.Value.CompareTo(version) > 0)
                     throw new UpdateException(UpdateErrorCode.Downgrade, "The installed executable is newer. No downgrade was made.");
-                if (installed.Value.CompareTo(version) == 0)
-                    return new UpdateResult(true, false, current, current, target, "ORelay is already installed at this version.");
+                sameVersion = installed.Value.CompareTo(version) == 0;
             }
 
-            var service = CheckService(target, request.ConfigurationPath, request.ServiceName, request.RestartService);
             var bytes = await File.ReadAllBytesAsync(source, cancellationToken);
             // The bootstrap checks the published archive. Also verify the bytes
             // copied from this running executable before launching the candidate.
             var sourceHash = SHA256.HashData(bytes);
+            if (sameVersion)
+            {
+                await using var installedStream = File.OpenRead(target);
+                var installedHash = await SHA256.HashDataAsync(installedStream, cancellationToken);
+                if (CryptographicOperations.FixedTimeEquals(sourceHash, installedHash))
+                    return new UpdateResult(true, false, current, current, target, "This executable is already installed at the destination.");
+            }
+
+            var service = CheckService(target, request.ConfigurationPath, request.ServiceName, request.RestartService);
             var result = await ReplaceAsync(bytes, target, current, current, service,
                 request.RestartService, cancellationToken, sourceHash);
             return result with
@@ -359,12 +366,14 @@ public sealed class UpdateEngine
         var current = Path.GetFullPath(target);
         while (current is not null)
         {
-            if (File.Exists(current) || Directory.Exists(current))
+            try
             {
                 if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
                     throw new UpdateException(UpdateErrorCode.InstallFailure,
                         "The executable path contains a symbolic link or junction. Use a direct path.");
             }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
 
             current = Path.GetDirectoryName(current);
         }
@@ -372,6 +381,8 @@ public sealed class UpdateEngine
 
     private static FileStream AcquireLock(string target)
     {
+        RejectLinkedPath(target);
+        RejectLinkedPath(target + ".update.lock");
         try
         {
             return new FileStream(target + ".update.lock", FileMode.OpenOrCreate,

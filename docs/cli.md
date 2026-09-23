@@ -124,6 +124,8 @@ orelay --config-file <absolute-config-path> update --restart-service --name <ser
 
 `install` copies the running native executable to a stable directory. The default is `%LOCALAPPDATA%\ORelay` on Windows and `~/.local/bin` on Unix. It preserves existing configuration and registration data. Add the directory to your `PATH`; the command does not edit shell profiles or install a service. The repository's `install.ps1` and `install.sh` bootstraps download a verified release and invoke this command.
 
+An existing executable with the same version is skipped only when its SHA-256 matches the source. Different builds of the same version are replaced; newer versions are never implicitly downgraded. Linked executable, directory, and lock-file paths are rejected before locking the destination.
+
 After installation, the bootstrap runs `setup --if-needed` from the installed executable when a terminal is available. Existing configuration is preserved on repeat installs. Pass `-Defaults` to the PowerShell script or `--defaults` to the shell script to accept local foreground defaults without questions. Pass `-SkipSetup` or `--skip-setup` to install only. Without a terminal, setup is skipped unless defaults were explicitly requested; the script prints the command to run later. Script options `-ConfigFile`/`--config-file` and `-Name`/`--name` also apply to setup.
 
 `update --check` reads the latest stable GitHub release. `update` verifies the matching archive checksum and executable version before replacing the installed binary. Development builds are never implicitly downgraded to an older stable release. Managed `dotnet run` builds do not support installation or updates.

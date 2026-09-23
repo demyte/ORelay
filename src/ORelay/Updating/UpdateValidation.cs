@@ -3,6 +3,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -64,6 +65,8 @@ public interface IUpdateRuntime
 
 public sealed class NativeUpdateRuntime : IUpdateRuntime
 {
+    private const int MaxProbeOutputChars = 1024;
+
     public string? ProcessPath => Environment.ProcessPath;
     public bool IsNative => !RuntimeFeature.IsDynamicCodeSupported &&
         string.Equals(Path.GetFileNameWithoutExtension(ProcessPath), "orelay", StringComparison.OrdinalIgnoreCase);
@@ -96,11 +99,21 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
             CreateNoWindow = true,
         });
         if (process is null) return null;
-        var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        var outputLimitReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdout = ReadProbeOutputAsync(process.StandardOutput, capture: true, outputLimitReached, cancellationToken);
+        var stderr = ReadProbeOutputAsync(process.StandardError, capture: false, outputLimitReached, cancellationToken);
         try
         {
-            await process.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+            var completion = Task.WhenAll(
+                process.WaitForExitAsync(cancellationToken), stdout, stderr)
+                .WaitAsync(TimeSpan.FromSeconds(15), cancellationToken);
+            if (await Task.WhenAny(completion, outputLimitReached.Task) == outputLimitReached.Task)
+            {
+                await StopProbeAsync(process);
+                return null;
+            }
+
+            await completion;
         }
         catch (TimeoutException)
         {
@@ -114,8 +127,7 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
         }
 
         var output = await stdout;
-        _ = await stderr;
-        if (process.ExitCode != 0 || output.Length > 1024) return null;
+        if (process.ExitCode != 0 || output is null || await stderr is null) return null;
         try
         {
             using var json = JsonDocument.Parse(output);
@@ -124,6 +136,28 @@ public sealed class NativeUpdateRuntime : IUpdateRuntime
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    private static async Task<string?> ReadProbeOutputAsync(
+        StreamReader reader, bool capture, TaskCompletionSource outputLimitReached,
+        CancellationToken cancellationToken)
+    {
+        var buffer = new char[256];
+        var output = capture ? new StringBuilder() : null;
+        var length = 0;
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer, cancellationToken);
+            if (read == 0) return output?.ToString() ?? string.Empty;
+            length += read;
+            if (length > MaxProbeOutputChars)
+            {
+                outputLimitReached.TrySetResult();
+                return null;
+            }
+
+            output?.Append(buffer, 0, read);
         }
     }
 

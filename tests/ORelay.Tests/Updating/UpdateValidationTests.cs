@@ -52,6 +52,69 @@ public sealed class UpdateValidationTests
     }
 
     [UnixFact]
+    public async Task VersionProbe_ReadsValidVersion()
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+
+        var directory = Path.Combine(Path.GetTempPath(), "orelay-version-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var script = Path.Combine(directory, "version-probe");
+            File.WriteAllText(script, "#!/bin/sh\nprintf '{\"version\":\"1.2.3\"}'\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            Assert.Equal("1.2.3", await new NativeUpdateRuntime().ReadExecutableVersionAsync(script, CancellationToken.None));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [UnixTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OversizedVersionProbeOutput_StopsItsChildProcess(bool stderr)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+
+        var directory = Path.Combine(Path.GetTempPath(), "orelay-version-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var pidFile = Path.Combine(directory, "pid");
+        Task<string?>? probe = null;
+        try
+        {
+            var script = Path.Combine(directory, "version-probe");
+            var redirect = stderr ? " >&2" : string.Empty;
+            File.WriteAllText(script,
+                $"#!/bin/sh\nprintf '%s' \"$$\" > '{pidFile}'\ni=0\nwhile [ $i -lt 200 ]; do printf '1234567890'{redirect}; i=$((i + 1)); done\nexec sleep 60\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            probe = new NativeUpdateRuntime().ReadExecutableVersionAsync(script, CancellationToken.None);
+            var pid = await WaitForPidAsync(pidFile);
+            Assert.Null(await probe.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Throws<ArgumentException>(() => Process.GetProcessById(pid));
+        }
+        finally
+        {
+            if (File.Exists(pidFile) && int.TryParse(File.ReadAllText(pidFile),
+                    System.Globalization.CultureInfo.InvariantCulture, out var processId))
+            {
+                try
+                {
+                    using var child = Process.GetProcessById(processId);
+                    if (!child.HasExited)
+                    {
+                        child.Kill(entireProcessTree: true);
+                        await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                }
+                catch (ArgumentException) { } // The child has already exited.
+            }
+
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [UnixFact]
     public async Task CancelledVersionProbe_StopsItsChildProcess()
     {
         if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
@@ -125,6 +188,14 @@ public sealed class UpdateValidationTests
 public sealed class UnixFactAttribute : FactAttribute
 {
     public UnixFactAttribute()
+    {
+        if (OperatingSystem.IsWindows()) Skip = "Requires a Unix executable script.";
+    }
+}
+
+public sealed class UnixTheoryAttribute : TheoryAttribute
+{
+    public UnixTheoryAttribute()
     {
         if (OperatingSystem.IsWindows()) Skip = "Requires a Unix executable script.";
     }

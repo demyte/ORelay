@@ -23,7 +23,9 @@ Run the Windows fixture with Windows PowerShell 5.1, which compiles its small fi
 
 `UpdateEngineTests.Replacement_StopStatusFailure*` covers both install and update when a running service stops but the following status check fails. The original executable must remain intact, and recovery must restart the service and verify health. If recovery fails, the result must explicitly report that failure. The denied-stop test also proves that a service which remains running receives no start command. These tests inject service failures and do not claim native service-manager coverage.
 
-`UpdateValidationTests` rejects oversized TAR sidecars and compares numeric prerelease identifiers beyond machine-integer limits. Its cancelled version-probe test runs on Unix and verifies that the owned child exits; Windows reports that case as skipped.
+`UpdateValidationTests` rejects oversized TAR sidecars and compares numeric prerelease identifiers beyond machine-integer limits. Unix executable probes verify normal version output, cancellation, and termination when either stdout or stderr exceeds its 1,024-character budget. Windows reports these script-based cases as skipped; native installation exercises successful version probes on every platform.
+
+`UpdateEngineTests` verifies that same-version installation skips only byte-identical artifacts and replaces differing builds. Unix link cases verify rejection before creating directories or lock files, including a dangling lock-file symlink. Windows junction rejection can be checked with a run-owned junction and published executable; no child destination or lock may appear in the linked directory.
 
 ## Native proof
 

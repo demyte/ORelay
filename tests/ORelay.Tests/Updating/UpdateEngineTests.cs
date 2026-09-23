@@ -306,6 +306,89 @@ public sealed class UpdateEngineTests
         Assert.Equal("old executable", File.ReadAllText(fixture.Target));
     }
 
+    [Theory]
+    [InlineData("1.0.0+different-commit")]
+    [InlineData("1.0.0+test")]
+    public async Task InstallSelf_ReplacesDifferentBytesAtTheSameVersion(string sourceVersion)
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        fixture.Runtime.CurrentVersion = sourceVersion;
+        fixture.Runtime.CandidateVersion = sourceVersion;
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.True(result.Succeeded);
+        Assert.True(result.Changed);
+        Assert.Equal(File.ReadAllBytes(fixture.Source), File.ReadAllBytes(fixture.Target));
+        Assert.Empty(Directory.GetFiles(fixture.Directory, "orelay*.backup-*"));
+    }
+
+    [Fact]
+    public async Task InstallSelf_IdenticalArtifactDoesNotReplaceOrRestart()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        File.Copy(fixture.Target, fixture.Source, overwrite: true);
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.True(result.Succeeded);
+        Assert.False(result.Changed);
+        Assert.Empty(fixture.Service.Operations);
+        Assert.Equal(File.ReadAllBytes(fixture.Source), File.ReadAllBytes(fixture.Target));
+    }
+
+    [UnixFact]
+    public async Task InstallSelf_RejectsLinkedDirectoryBeforeCreatingSubdirectoryOrLock()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        var other = Directory.CreateDirectory(Path.Combine(fixture.Directory, "other")).FullName;
+        var link = Path.Combine(fixture.Directory, "alias");
+        Directory.CreateSymbolicLink(link, other);
+        try
+        {
+            var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(Path.Combine(link, "new-install")));
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(UpdateErrorCode.InstallFailure, result.ErrorCode);
+            Assert.Empty(Directory.GetFileSystemEntries(other));
+        }
+        finally { Directory.Delete(link); }
+    }
+
+    [UnixFact]
+    public async Task InstallSelf_RejectsLinkedExecutableBeforeCreatingLock()
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.ProcessPath = fixture.Source;
+        File.Delete(fixture.Target);
+        File.CreateSymbolicLink(fixture.Target, fixture.Source);
+
+        var result = await fixture.Engine.InstallSelfAsync(new InstallRequest(fixture.Directory));
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.InstallFailure, result.ErrorCode);
+        Assert.False(File.Exists(fixture.Target + ".update.lock"));
+        Assert.Equal("source executable", File.ReadAllText(fixture.Source));
+    }
+
+    [UnixFact]
+    public async Task Update_RejectsDanglingLockLinkWithoutCreatingItsTarget()
+    {
+        using var fixture = new Fixture();
+        var other = Path.Combine(fixture.Directory, "unrelated-file");
+        File.CreateSymbolicLink(fixture.Target + ".update.lock", other);
+
+        var result = await fixture.Engine.UpdateAsync(new UpdateRequest());
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(UpdateErrorCode.InstallFailure, result.ErrorCode);
+        Assert.False(File.Exists(other));
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+    }
+
     private sealed class Fixture : IDisposable
     {
         public Fixture()
