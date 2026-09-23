@@ -11,6 +11,8 @@ param(
     [switch] $SkipPath
 )
 
+# Keep preferences and helper functions local when this script is piped to iex.
+& {
 $ErrorActionPreference = 'Stop'
 $NetTls12 = [Net.SecurityProtocolType]::Tls12
 [Net.ServicePointManager]::SecurityProtocol = $NetTls12
@@ -122,6 +124,9 @@ try {
     if ($Version -and $Matches[1] -cne $Version) { throw 'GitHub returned a different version than requested.' }
     if ($release.draft -or $release.prerelease) { throw 'The selected ORelay release is not stable.' }
     $versionText = $Matches[1]
+    if ([version]$versionText -lt [version]'0.2.0') {
+        throw "ORelay $tag predates the installer. Choose version 0.2.0 or later, or extract that release manually."
+    }
     $archive = "orelay-$versionText-$rid.zip"
     $checksum = "$archive.sha256"
     foreach ($assetName in @($archive, $checksum)) {
@@ -167,7 +172,7 @@ try {
     if ($Name) { $installerArgs += @('--name', $Name) }
     if ($RestartService) { $installerArgs += '--restart-service' }
     & $executable @installerArgs
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) { throw "ORelay installation failed with exit code $LASTEXITCODE." }
 
     $installed = Join-Path $InstallDir 'orelay.exe'
     $setupArgs = @('setup', '--if-needed')
@@ -182,10 +187,10 @@ try {
         if ($Name) { Write-Output "  --name: $Name" }
     } elseif ($Defaults) {
         & $installed @setupArgs --defaults --yes
-        exit $LASTEXITCODE
+        if ($LASTEXITCODE -ne 0) { throw "ORelay setup failed with exit code $LASTEXITCODE." }
     } elseif ($interactiveConsole) {
         & $installed @setupArgs
-        exit $LASTEXITCODE
+        if ($LASTEXITCODE -ne 0) { throw "ORelay setup failed with exit code $LASTEXITCODE." }
     } else {
         Write-Output "Installed executable: $installed"
         Write-Output 'Run it with: setup --if-needed'
@@ -193,10 +198,7 @@ try {
         if ($Name) { Write-Output "  --name: $Name" }
         if ($SkipPath) { Write-Output '  --skip-path' }
     }
-    exit 0
-} catch {
-    [Console]::Error.WriteLine($_.Exception.Message)
-    exit 1
 } finally {
     if ($tempRoot -and (Test-Path -LiteralPath $tempRoot)) { Remove-Item -LiteralPath $tempRoot -Recurse -Force }
+}
 }

@@ -16,12 +16,12 @@ ORelay ships as one native executable for Windows, Linux, and macOS, on x64 and 
 
 Run the command for your platform. The installer downloads the matching executable and verifies its checksum. No .NET installation, GitHub account, or GitHub CLI is required.
 
-> The bootstrap, self-updater, and persistent registrations are new in this checkout. Published versions through `v0.1.2` do not include them. The commands below need the first release containing these changes.
+The installer, guided setup, self-updater, and persistent registrations require version `0.2.0` or later.
 
 ### Windows · PowerShell
 
 ```powershell
-powershell -NoProfile -Command "irm https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1 | iex"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/demyte/ORelay/main/install.ps1)))
 ```
 
 ### macOS and Linux · Shell

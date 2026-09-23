@@ -77,6 +77,11 @@ jobs:
         shell: bash
         run: sh scripts/test-bootstrap.sh
 
+      - name: Check Windows bootstrap with PowerShell 7
+        if: startsWith(matrix.rid, 'win-')
+        shell: powershell
+        run: ./scripts/test-bootstrap.ps1 -Shell pwsh
+
       - name: Prepare run-owned paths
         shell: pwsh
         env:

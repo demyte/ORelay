@@ -1,3 +1,5 @@
+param([string] $Shell = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe")
+
 $ErrorActionPreference = 'Stop'
 if (-not [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) {
     throw 'Run this fixture test on Windows, including Windows PowerShell 5.1.'
@@ -57,7 +59,8 @@ switch ($ArgsFromCaller[0] + ' ' + $ArgsFromCaller[1]) {
     $assets = @()
     if ($env:FIXTURE_MISSING -ne 'archive') { $assets += @{ name = $env:FIXTURE_ARCHIVE } }
     if ($env:FIXTURE_MISSING -ne 'checksum') { $assets += @{ name = "$env:FIXTURE_ARCHIVE.sha256" } }
-    [pscustomobject]@{ tagName = 'v1.2.3'; assets = $assets; draft = $false; prerelease = $false } | ConvertTo-Json -Depth 5 -Compress
+    $tag = if ($env:FIXTURE_TAG) { $env:FIXTURE_TAG } else { 'v1.2.3' }
+    [pscustomobject]@{ tagName = $tag; assets = $assets; draft = $false; prerelease = $false } | ConvertTo-Json -Depth 5 -Compress
     exit 0
   }
   'release download' {
@@ -86,7 +89,7 @@ exit /b %ERRORLEVEL%
     $env:SETUP_LOG = Join-Path $testRoot 'setup-arguments.txt'
     $env:GH_TOKEN = 'fixture-token'
     $arguments = @('-NoProfile', '-File', (Join-Path $repoRoot 'install.ps1'), '-Version', '1.2.3', '-InstallDir', (Join-Path $testRoot 'install path'), '-ConfigFile', (Join-Path $testRoot 'state file.json'), '-Name', 'relay service', '-RestartService')
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments
+    & $Shell @arguments
     if ($LASTEXITCODE -ne 0) { throw "Bootstrap failed with exit code $LASTEXITCODE." }
     $actual = Get-Content -LiteralPath $env:ARG_LOG
     foreach ($expected in @('install', '--install-dir', (Join-Path $testRoot 'install path'), '--config-file', (Join-Path $testRoot 'state file.json'), '--name', 'relay service', '--restart-service')) {
@@ -94,47 +97,100 @@ exit /b %ERRORLEVEL%
     }
     if (Test-Path -LiteralPath $env:SETUP_LOG) { throw 'Unattended install unexpectedly started setup.' }
 
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults -AddToPath
+    & $Shell @arguments -Defaults -AddToPath
     if ($LASTEXITCODE -ne 0) { throw "Default setup failed with exit code $LASTEXITCODE." }
     $setupActual = Get-Content -LiteralPath $env:SETUP_LOG
     if ($setupActual[0] -ine (Join-Path $testRoot 'install path\orelay.exe')) { throw 'Setup did not run from installed executable.' }
     foreach ($expected in @('setup', '--if-needed', '--config-file', (Join-Path $testRoot 'state file.json'), '--name', 'relay service', '--defaults', '--yes', '--add-to-path')) {
         if ($setupActual -cnotcontains $expected) { throw "Setup argument was not preserved: $expected" }
     }
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults -SkipPath
+    & $Shell @arguments -Defaults -SkipPath
     if ($LASTEXITCODE -ne 0) { throw "Skip PATH setup failed with exit code $LASTEXITCODE." }
     $setupActual = Get-Content -LiteralPath $env:SETUP_LOG
     if ($setupActual -cnotcontains '--skip-path' -or $setupActual -ccontains '--add-to-path') { throw 'Skip PATH option was not forwarded correctly.' }
     $env:FIXTURE_SETUP_EXIT = '23'
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults
-    if ($LASTEXITCODE -ne 23) { throw "Setup exit code was not passed through. Expected 23, got $LASTEXITCODE." }
+    $ErrorActionPreference = 'Continue'
+    $failureOutput = & $Shell @arguments -Defaults 2>&1
+    $failureCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($failureCode -ne 1 -or "$failureOutput" -notmatch 'setup failed with exit code 23') { throw 'Setup failure was not reported.' }
     Remove-Item Env:FIXTURE_SETUP_EXIT
     Remove-Item -LiteralPath $env:SETUP_LOG
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -SkipSetup
+    & $Shell @arguments -SkipSetup
     if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $env:SETUP_LOG)) { throw 'Skip setup unexpectedly ran setup.' }
     $previousErrorPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $conflictOutput = & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments -Defaults -SkipSetup 2>&1
+    $conflictOutput = & $Shell @arguments -Defaults -SkipSetup 2>&1
     $conflictCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($conflictCode -eq 0) { throw 'Conflicting setup flags were accepted.' }
     foreach ($invalidFlags in @(@('-AddToPath', '-SkipPath'), @('-AddToPath', '-SkipSetup'), @('-SkipPath', '-SkipSetup'), @('-AddToPath'))) {
         Remove-Item -LiteralPath $env:ARG_LOG -ErrorAction SilentlyContinue
         $ErrorActionPreference = 'Continue'
-        $invalidOutput = & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments @invalidFlags 2>&1
+        $invalidOutput = & $Shell @arguments @invalidFlags 2>&1
         $invalidCode = $LASTEXITCODE
         $ErrorActionPreference = $previousErrorPreference
         if ($invalidCode -eq 0 -or (Test-Path -LiteralPath $env:ARG_LOG)) { throw "Invalid PATH flags started download or install: $($invalidFlags -join ' ')" }
     }
     $env:FIXTURE_EXIT = '17'
-    & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments
-    if ($LASTEXITCODE -ne 17) { throw "Installer exit code was not passed through. Expected 17, got $LASTEXITCODE." }
+    $ErrorActionPreference = 'Continue'
+    $failureOutput = & $Shell @arguments 2>&1
+    $failureCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($failureCode -ne 1 -or "$failureOutput" -notmatch 'installation failed with exit code 17') { throw 'Installation failure was not reported.' }
     Remove-Item Env:FIXTURE_EXIT
+
+    # Exercise the pasted commands inside a caller, where exit would close its shell.
+    $env:BOOTSTRAP_SOURCE = Join-Path $repoRoot 'install.ps1'
+    $caller = Join-Path $testRoot 'caller.ps1'
+    @'
+param([string] $Mode, [string] $ExpectedError)
+$ErrorActionPreference = 'Continue'
+$env:LOCALAPPDATA = $env:FIXTURE_ROOT
+$source = Get-Content -Raw -LiteralPath $env:BOOTSTRAP_SOURCE
+$caught = $null
+try {
+    if ($Mode -eq 'iex') {
+        $source | Invoke-Expression
+    } else {
+        & ([scriptblock]::Create($source)) -InstallDir (Join-Path $env:FIXTURE_ROOT 'scoped install') -Defaults -SkipPath
+    }
+} catch { $caught = $_.Exception.Message }
+if ($ExpectedError -and $caught -notlike "*$ExpectedError*") { throw "Missing expected failure: $caught" }
+if (-not $ExpectedError -and $caught) { throw $caught }
+if ($ErrorActionPreference -ne 'Continue') { throw 'Installer changed caller error preferences.' }
+if (Get-Command Get-RuntimeId -ErrorAction SilentlyContinue) { throw 'Installer leaked helper functions.' }
+Write-Output 'caller-alive'
+exit 0
+'@ | Set-Content -LiteralPath $caller
+    foreach ($mode in @('iex', 'scriptblock')) {
+        foreach ($failure in @('', 'install', 'setup')) {
+            if ($mode -eq 'iex' -and $failure -eq 'setup') { continue }
+            $expectedError = ''
+            if ($failure -eq 'install') { $env:FIXTURE_EXIT = '17'; $expectedError = 'installation failed with exit code 17' }
+            if ($failure -eq 'setup') { $env:FIXTURE_SETUP_EXIT = '23'; $expectedError = 'setup failed with exit code 23' }
+            $callerArguments = @('-NoProfile', '-File', $caller, '-Mode', $mode)
+            if ($expectedError) { $callerArguments += @('-ExpectedError', $expectedError) }
+            $callerOutput = & $Shell @callerArguments
+            if ($LASTEXITCODE -ne 0 -or $callerOutput -cnotcontains 'caller-alive') { throw "The $mode caller did not survive $failure installation." }
+            Remove-Item Env:FIXTURE_EXIT, Env:FIXTURE_SETUP_EXIT -ErrorAction SilentlyContinue
+        }
+    }
+
+    $env:FIXTURE_TAG = 'v0.1.2'
+    Remove-Item -LiteralPath $env:ARG_LOG -ErrorAction SilentlyContinue
+    $oldArguments = @('-NoProfile', '-File', (Join-Path $repoRoot 'install.ps1'), '-Version', '0.1.2', '-InstallDir', (Join-Path $testRoot 'old release'))
+    $ErrorActionPreference = 'Continue'
+    $failureOutput = & $Shell @oldArguments 2>&1
+    $failureCode = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($failureCode -eq 0 -or "$failureOutput" -notmatch 'predates the installer' -or (Test-Path -LiteralPath $env:ARG_LOG) -or (Test-Path -LiteralPath (Join-Path $testRoot 'old release'))) { throw 'Old release was not rejected before installation.' }
+    Remove-Item Env:FIXTURE_TAG
 
     $env:FIXTURE_MISSING = 'archive'
     Remove-Item -LiteralPath $env:ARG_LOG -ErrorAction SilentlyContinue
     $ErrorActionPreference = 'Continue'
-    $failureOutput = & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments 2>&1
+    $failureOutput = & $Shell @arguments 2>&1
     $failureCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($failureCode -eq 0 -or (Test-Path -LiteralPath $env:ARG_LOG)) { throw 'Missing asset unexpectedly ran the installer.' }
@@ -144,14 +200,18 @@ exit /b %ERRORLEVEL%
     $env:FIXTURE_BAD_CHECKSUM = '1'
     Remove-Item -LiteralPath $env:ARG_LOG -ErrorAction SilentlyContinue
     $ErrorActionPreference = 'Continue'
-    $failureOutput = & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" @arguments 2>&1
+    $failureOutput = & $Shell @arguments 2>&1
     $failureCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($failureCode -eq 0 -or (Test-Path -LiteralPath $env:ARG_LOG)) { throw 'Checksum failure unexpectedly ran the installer.' }
+    foreach ($mode in @('iex', 'scriptblock')) {
+        $callerOutput = & $Shell -NoProfile -File $caller -Mode $mode -ExpectedError 'checksum does not match'
+        if ($LASTEXITCODE -ne 0 -or $callerOutput -cnotcontains 'caller-alive') { throw "The $mode caller did not survive a checksum failure." }
+    }
     if (@(Get-ChildItem -LiteralPath $testRoot -Directory -Filter 'orelay-bootstrap-*').Count -gt 0) { throw 'Bootstrap left a temporary download directory behind.' }
     Write-Output 'Windows bootstrap fixture checks passed.'
 } finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force
-    Remove-Item Env:GH_TOKEN, Env:FIXTURE_ROOT, Env:FIXTURE_ARCHIVE, Env:FIXTURE_MISSING, Env:FIXTURE_BAD_CHECKSUM, Env:FIXTURE_EXIT, Env:FIXTURE_SETUP_EXIT, Env:ARG_LOG, Env:SETUP_LOG -ErrorAction SilentlyContinue
+    Remove-Item Env:GH_TOKEN, Env:FIXTURE_ROOT, Env:FIXTURE_ARCHIVE, Env:FIXTURE_MISSING, Env:FIXTURE_BAD_CHECKSUM, Env:FIXTURE_EXIT, Env:FIXTURE_SETUP_EXIT, Env:ARG_LOG, Env:SETUP_LOG, Env:BOOTSTRAP_SOURCE, Env:FIXTURE_TAG -ErrorAction SilentlyContinue
 }
 exit 0

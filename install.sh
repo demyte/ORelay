@@ -97,6 +97,10 @@ esac
 old_ifs=$IFS; IFS=.; set -- $version; IFS=$old_ifs
 [ "$#" -eq 3 ] || { printf 'Version must be a stable X.Y.Z release.\n' >&2; exit 2; }
 for part do case "$part" in ''|*[!0-9]*) printf 'Version must be a stable X.Y.Z release.\n' >&2; exit 2 ;; esac; done
+if [ "$1" -eq 0 ] && [ "$2" -lt 2 ]; then
+    printf 'ORelay v%s predates the installer. Choose version 0.2.0 or later, or extract that release manually.\n' "$version" >&2
+    exit 2
+fi
 tag="v$version"
 archive="orelay-$version-$rid.tar.gz"
 checksum="$archive.sha256"

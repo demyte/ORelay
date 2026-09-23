@@ -150,6 +150,11 @@ grep -Fxq -- '  --name: relay service' "$test_root/skip-output"
 if sh "$root/install.sh" --defaults --skip-setup > /dev/null 2>&1; then
   printf 'Conflicting setup flags were accepted.\n' >&2; exit 1
 fi
+if sh "$root/install.sh" --version 0.1.2 --install-dir "$test_root/old release" > "$test_root/old-release-output" 2>&1; then
+  printf 'Old release was accepted.\n' >&2; exit 1
+fi
+grep -Fq 'predates the installer' "$test_root/old-release-output"
+[ ! -e "$test_root/old release" ] || { printf 'Old release created an installation.\n' >&2; exit 1; }
 for flags in '--add-to-path --skip-path' '--add-to-path --skip-setup' '--skip-path --skip-setup' '--add-to-path'; do
   rm -f "$test_root/args"
   if PATH="$test_root/bin:$PATH" FIXTURE_ROOT="$test_root/fixture" FIXTURE_ARCHIVE=orelay-1.2.3-linux-x64.tar.gz HOME="$test_root/home" TMPDIR="$test_root/tmp" \

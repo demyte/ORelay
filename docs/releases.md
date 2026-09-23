@@ -37,11 +37,11 @@ Ordinary pushes to `main` and pull requests only produce build artifacts. They n
 
 ## Bootstrap and self-update releases
 
-The root `install.ps1` and `install.sh` scripts select the platform archive and its checksum from the latest stable release, then invoke the downloaded executable's `install` command. The selected release must include that command; versions through `v0.1.2` predate it. Keep the archive naming contract `orelay-<version>-<rid>.zip` or `.tar.gz`, with a matching `.sha256` file.
+The root `install.ps1` and `install.sh` scripts select the platform archive and its checksum from the latest stable release, then invoke the downloaded executable's `install` command. They require `v0.2.0` or later and reject older versions before downloading assets. Keep the archive naming contract `orelay-<version>-<rid>.zip` or `.tar.gz`, with a matching `.sha256` file.
 
 `orelay update` uses the same release assets. It excludes drafts and prereleases and refuses automatic downgrades. Native artifacts contain SQLite linked into the executable. Keep configuration and the registration database outside executable replacement, and retain database compatibility with the previous binary so rollback can restart it.
 
-Releasing these changes still requires an explicitly authorized version tag. Adding bootstrap scripts or updating README examples does not publish a release.
+Each release requires an explicitly authorized version tag. Adding bootstrap scripts or updating README examples does not publish a release.
 
 ## GitHub Packages
 
