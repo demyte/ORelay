@@ -61,10 +61,13 @@ The JSON file has `schemaVersion: 1`. Updates use a sibling lock and atomic repl
 | `maxRegistrations` | `--max-registrations` | `1000` |
 | `autoUpdate` | Config only | `true` |
 | `autoUpdateIntervalSeconds` | Config only | `10800` |
+| `autoUpdateLevel` | Config only | `major` |
 
 Ports range from 1 to 65535, leases from 1 to 86400 seconds, and registration capacity from 1 to 1000000. Discovery accepts `none`, `local`, or `tailscale`. `none` and `local` use the configured listener/hostname for the relay; neither runs Tailscale.
 
 `autoUpdate` accepts `true` or `false`. `autoUpdateIntervalSeconds` accepts 60 to 2592000 seconds. These saved settings apply only to a published executable running under Windows Service Control Manager or Linux systemd. Updates are enabled by default, with checks every three hours. Existing saved `false` values and custom intervals stay in effect until changed or cleared. Changing either setting takes effect while the service runs. The next check is due one interval after service startup or the last completed worker. Shortening the interval starts a check immediately if it is overdue. Checks never overlap.
+
+`autoUpdateLevel` accepts `major`, `minor`, or `patch`, ignoring case. `patch` allows updates within the installed major and minor version, such as `1.2.3` to `1.2.4`. `minor` also allows a new minor version within the same major, such as `1.2.3` to `1.3.0`. `major` allows any newer stable release, including `2.0.0`. New configurations save `major`; older configurations without the field use `major`. Clearing the setting restores that default. For example, run `orelay config set autoUpdateLevel patch` to accept only patch updates. The latest stable release is skipped if it exceeds this limit; the updater does not search older releases. Manual `update` commands do not use this setting.
 
 ### Live configuration
 
@@ -77,6 +80,7 @@ Foreground relays and services watch the selected configuration file. Both direc
 | `leaseSeconds` | New registrations and renewals use the new duration. Existing expiry times stay unchanged until renewal. |
 | `maxRegistrations` | New registrations use the new limit. Lowering it does not evict existing registrations. |
 | `autoUpdate`, `autoUpdateIntervalSeconds` | A native service starts, stops, or reschedules future update checks. An installation already underway finishes normally. |
+| `autoUpdateLevel` | Workers read the saved limit before installing. Changing it does not interrupt an installation already underway. |
 
 Invocation flags still override saved values after a reload. Changing a bind from shared to loopback also blocks non-loopback callback destinations, including existing registrations, without deleting their rows or extending their leases. Changing it back permits those registrations again if they have not expired.
 
@@ -179,7 +183,7 @@ Automatic service updates run every three hours by default. Set `autoUpdate` to 
 
 The worker runs independently so it can finish replacing and restarting the relay after the relay stops. It uses the service account's permissions on Windows. Linux uses a separate transient systemd service and requires systemd 254 or later with permission to launch it. Neither platform prompts for elevation. Permission, network, or validation failures leave callback serving active and are retried after the interval.
 
-The latest worker result is saved as `<config-stem>.auto-update.json` beside the selected configuration. It contains the completion time and updater result. Set `autoUpdate` to `false` to stop scheduling further checks. Workers check the saved value again before updating; this does not interrupt installation or rollback already underway.
+The latest worker result is saved as `<config-stem>.auto-update.json` beside the selected configuration. It contains the completion time and updater result, including `skipped` when the release exceeds `autoUpdateLevel`. Set `autoUpdate` to `false` to stop scheduling further checks. Workers check the saved enablement and update level again before updating; this does not interrupt installation or rollback already underway.
 
 Private release access uses `GH_TOKEN`, `GITHUB_TOKEN`, or the current GitHub CLI login. Public releases can be downloaded without credentials. Credentials are never saved in relay configuration. Both commands accept `--json`, keep diagnostics on stderr, and use the exit codes below.
 

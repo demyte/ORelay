@@ -26,6 +26,7 @@ public static class RelaySettingsValidator
         ValidateLeaseSeconds(settings.LeaseSeconds, path);
         ValidateMaxRegistrations(settings.MaxRegistrations, path);
         ValidateAutoUpdateIntervalSeconds(settings.AutoUpdateIntervalSeconds, path);
+        ValidateAutoUpdateLevel(settings.AutoUpdateLevel, path);
     }
 
     internal static RelaySettings ValidateAndReturn(RelaySettings settings, string? path = null)
@@ -65,6 +66,9 @@ public static class RelaySettingsValidator
             case "autoUpdateIntervalSeconds":
                 setting = RelaySettingKey.AutoUpdateIntervalSeconds;
                 return true;
+            case "autoUpdateLevel":
+                setting = RelaySettingKey.AutoUpdateLevel;
+                return true;
             default:
                 setting = default;
                 return false;
@@ -82,6 +86,7 @@ public static class RelaySettingsValidator
         RelaySettingKey.MaxRegistrations => "maxRegistrations",
         RelaySettingKey.AutoUpdate => "autoUpdate",
         RelaySettingKey.AutoUpdateIntervalSeconds => "autoUpdateIntervalSeconds",
+        RelaySettingKey.AutoUpdateLevel => "autoUpdateLevel",
         _ => throw new ArgumentOutOfRangeException(nameof(setting), setting, "Unknown relay setting."),
     };
 
@@ -98,13 +103,14 @@ public static class RelaySettingsValidator
         int? maxRegistrations = null;
         bool? autoUpdate = null;
         int? autoUpdateIntervalSeconds = null;
+        string? autoUpdateLevel = null;
 
         foreach (var pair in values)
         {
             if (!TryParseKey(pair.Key, out var key))
             {
                 throw InvalidValue(RelayConfigurationErrorCode.UnknownSetting, pair.Key, pair.Value, path,
-                    $"Unknown setting '{pair.Key}'. Supported settings are port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations, autoUpdate, and autoUpdateIntervalSeconds.");
+                    $"Unknown setting '{pair.Key}'. Supported settings are port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations, autoUpdate, autoUpdateIntervalSeconds, and autoUpdateLevel.");
             }
 
             switch (key)
@@ -144,11 +150,15 @@ public static class RelaySettingsValidator
                     autoUpdateIntervalSeconds = ParseInt(pair.Key, pair.Value, path);
                     ValidateAutoUpdateIntervalSeconds(autoUpdateIntervalSeconds.Value, path, pair.Key);
                     break;
+                case RelaySettingKey.AutoUpdateLevel:
+                    autoUpdateLevel = RequireText(pair.Key, pair.Value, path).ToLowerInvariant();
+                    ValidateAutoUpdateLevel(autoUpdateLevel, path, pair.Key);
+                    break;
             }
         }
 
         return new RelaySettingsPatch(port, bind, publicUrl, hostname, autoDiscovery, leaseSeconds, maxRegistrations,
-            autoUpdate, autoUpdateIntervalSeconds);
+            autoUpdate, autoUpdateIntervalSeconds, autoUpdateLevel);
     }
 
     internal static void ValidateDocument(RelayConfigurationDocument document, string path)
@@ -303,6 +313,15 @@ public static class RelaySettingsValidator
         {
             throw InvalidValue(RelayConfigurationErrorCode.InvalidValue, key, value.ToString(CultureInfo.InvariantCulture), path,
                 $"Setting '{key}' must be between {MinimumAutoUpdateIntervalSeconds} and {MaximumAutoUpdateIntervalSeconds} seconds.");
+        }
+    }
+
+    private static void ValidateAutoUpdateLevel(string value, string? path, string key = "autoUpdateLevel")
+    {
+        if (value is not ("major" or "minor" or "patch"))
+        {
+            throw InvalidValue(RelayConfigurationErrorCode.InvalidValue, key, value, path,
+                $"Setting '{key}' must be one of: major, minor, patch.");
         }
     }
 

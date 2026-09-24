@@ -113,6 +113,7 @@ internal sealed partial class ServiceAutoUpdateWorker
                     phase = "release-check";
                     CheckingRelease(logger);
                     var check = await checkRelease(request, cancellationToken);
+                    var currentSettings = store.Exists ? store.Read() : null;
                     if (!check.Succeeded)
                     {
                         reason = "release-check-failed";
@@ -125,7 +126,7 @@ internal sealed partial class ServiceAutoUpdateWorker
                         result = new(DateTimeOffset.UtcNow, "up-to-date", "No update is available.",
                             check.CurrentVersion, check.LatestVersion);
                     }
-                    else if (!store.Exists || !store.Read().AutoUpdate)
+                    else if (currentSettings is null || !currentSettings.AutoUpdate)
                     {
                         reason = "disabled-during-check";
                         result = new(DateTimeOffset.UtcNow, "disabled", "Automatic updates were disabled during the release check.",
@@ -139,15 +140,26 @@ internal sealed partial class ServiceAutoUpdateWorker
                     }
                     else
                     {
-                        phase = "installation";
-                        InstallingUpdate(logger, check.CurrentVersion, check.LatestVersion);
-                        var updated = await installUpdate(request, cancellationToken);
-                        reason = updated.Succeeded ? updated.Changed ? "installed" : "already-installed" : "installation-failed";
-                        result = new(DateTimeOffset.UtcNow, updated.Succeeded ?
-                            updated.Changed ? "updated" : "up-to-date" : "failed",
-                            updated.Succeeded ? updated.Changed ? "Update installed." : "No update was needed." :
-                                updated.Message,
-                            updated.CurrentVersion, updated.LatestVersion, updated.ErrorCode);
+                        var level = currentSettings.AutoUpdateLevel;
+                        if (!AutoUpdatePolicy.Allows(check.CurrentVersion, check.LatestVersion!, level))
+                        {
+                            reason = "release-outside-auto-update-level";
+                            result = new(DateTimeOffset.UtcNow, "skipped", AutoUpdatePolicy.SkipMessage(level),
+                                check.CurrentVersion, check.LatestVersion);
+                        }
+                        else
+                        {
+                            phase = "installation";
+                            InstallingUpdate(logger, check.CurrentVersion, check.LatestVersion);
+                            var updated = await installUpdate(request with { AutoUpdateLevel = level }, cancellationToken);
+                            var skipped = updated.Succeeded && !updated.Changed && updated.UpdateAvailable;
+                            reason = skipped ? "release-outside-auto-update-level" :
+                                updated.Succeeded ? updated.Changed ? "installed" : "already-installed" : "installation-failed";
+                            result = new(DateTimeOffset.UtcNow, updated.Succeeded ?
+                                updated.Changed ? "updated" : skipped ? "skipped" : "up-to-date" : "failed",
+                                updated.Succeeded && updated.Changed ? "Update installed." : updated.Message,
+                                updated.CurrentVersion, updated.LatestVersion, updated.ErrorCode);
+                        }
                     }
                 }
             }

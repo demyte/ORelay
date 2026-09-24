@@ -7,6 +7,56 @@ namespace ORelay.Tests.Updating;
 
 public sealed class ServiceAutoUpdateWorkerTests
 {
+    [Theory]
+    [InlineData("patch", "1.2.3", "1.2.4", true)]
+    [InlineData("patch", "1.2.3", "1.3.0", false)]
+    [InlineData("patch", "1.2.3", "2.0.0", false)]
+    [InlineData("minor", "1.2.3", "1.2.4", true)]
+    [InlineData("minor", "1.2.3", "1.3.0", true)]
+    [InlineData("minor", "1.2.3", "2.0.0", false)]
+    [InlineData("major", "1.2.3", "1.2.4", true)]
+    [InlineData("major", "1.2.3", "1.3.0", true)]
+    [InlineData("major", "1.2.3", "2.0.0", true)]
+    [InlineData("patch", "0.2.3", "0.3.0", false)]
+    [InlineData("minor", "0.2.3", "0.3.0", true)]
+    [InlineData("patch", "1.2.3-dev.1+build", "1.2.3", true)]
+    public async Task AutoUpdateLevelControlsWhichReleasesAreInstalled(string level, string current, string latest, bool allowed)
+    {
+        using var fixture = new Fixture();
+        fixture.SetEnabled(true);
+        new RelayConfigurationStore(fixture.Config).Set("autoUpdateLevel", level);
+        fixture.CheckResult = new(true, false, current, latest, fixture.Executable, "Available.", UpdateAvailable: true);
+
+        Assert.Equal(0, await fixture.RunAsync());
+
+        Assert.Equal(allowed ? 1 : 0, fixture.UpdateCalls);
+        Assert.Equal(allowed ? "updated" : "skipped", fixture.Status());
+        if (allowed)
+            Assert.Equal(level, fixture.LastUpdateRequest!.AutoUpdateLevel);
+        else
+        {
+            Assert.Contains("outside the configured autoUpdateLevel", File.ReadAllText(fixture.ResultFile));
+            Assert.Contains("reason=release-outside-auto-update-level", File.ReadAllText(fixture.LogFile));
+        }
+    }
+
+    [Theory]
+    [InlineData("major", "patch", 0)]
+    [InlineData("patch", "major", 1)]
+    public async Task LevelChangedDuringCheckUsesLatestSavedSetting(string initial, string changed, int expectedInstalls)
+    {
+        using var fixture = new Fixture();
+        fixture.SetEnabled(true);
+        var store = new RelayConfigurationStore(fixture.Config);
+        store.Set("autoUpdateLevel", initial);
+        fixture.OnCheck = () => store.Set("autoUpdateLevel", changed);
+
+        Assert.Equal(0, await fixture.RunAsync());
+
+        Assert.Equal(expectedInstalls, fixture.UpdateCalls);
+        Assert.Equal(expectedInstalls == 0 ? "skipped" : "updated", fixture.Status());
+    }
+
     [Fact]
     public async Task DisabledConfigurationMakesNoNetworkRequest()
     {

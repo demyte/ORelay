@@ -485,6 +485,7 @@ try {
         maxRegistrations = 1000
         autoUpdate = $true
         autoUpdateIntervalSeconds = 10800
+        autoUpdateLevel = 'major'
     }
     Assert-Equal @($defaults.PSObject.Properties).Count $expectedDefaults.Count 'Default configuration has unexpected fields.'
     foreach ($entry in $expectedDefaults.GetEnumerator()) {
@@ -539,6 +540,19 @@ try {
     $autoConfig = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
     Assert-Equal $autoConfig.autoUpdate $true 'Automatic updates were not enabled in the saved configuration.'
     Assert-Equal $autoConfig.autoUpdateIntervalSeconds 60 'Invalid interval changed the saved setting.'
+
+    foreach ($level in @('patch', 'minor', 'major')) {
+        [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateLevel', $level, '--json') -EvidenceName "config-auto-update-level-$level")
+        $savedLevel = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+        Assert-Equal $savedLevel.autoUpdateLevel $level 'Update level was not saved.'
+    }
+    [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'set', 'autoUpdateLevel', 'invalid', '--json') -EvidenceName 'config-auto-update-level-invalid' -ExpectedExitCode 3)
+    Assert-Equal (Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json).autoUpdateLevel 'major' 'Invalid update level changed the saved setting.'
+    [void](Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'clear', 'autoUpdateLevel', '--json') -EvidenceName 'config-auto-update-level-clear')
+    $levelHash = (Get-FileHash -LiteralPath $configPath).Hash
+    $defaultLevel = Invoke-Native -Arguments @('--config-file', $configPath, 'config', 'get', 'autoUpdateLevel', '--json') -EvidenceName 'config-auto-update-level-missing'
+    Assert-Equal ($defaultLevel.Stdout | ConvertFrom-Json).value 'major' 'Missing update level did not use major.'
+    Assert-Equal (Get-FileHash -LiteralPath $configPath).Hash $levelHash 'Reading the missing update level changed the file.'
 
     $overrideServer = Start-OwnedServer -ConfigPath $configPath -Port $overridePort -EvidencePrefix 'server-override'
     $httpHandler = [System.Net.Http.HttpClientHandler]::new()

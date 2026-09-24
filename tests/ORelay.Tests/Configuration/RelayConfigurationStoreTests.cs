@@ -31,7 +31,8 @@ public sealed class RelayConfigurationStoreTests
               "leaseSeconds": 300,
               "maxRegistrations": 1000,
               "autoUpdate": true,
-              "autoUpdateIntervalSeconds": 10800
+              "autoUpdateIntervalSeconds": 10800,
+              "autoUpdateLevel": "major"
             }
             """);
         using var actual = JsonDocument.Parse(File.ReadAllText(store.FilePath));
@@ -144,6 +145,31 @@ public sealed class RelayConfigurationStoreTests
         Assert.Equal(14_001, settings.Port);
         Assert.True(settings.AutoUpdate);
         Assert.Equal(10_800, settings.AutoUpdateIntervalSeconds);
+        Assert.Equal("major", settings.AutoUpdateLevel);
+        Assert.DoesNotContain("autoUpdateLevel", File.ReadAllText(fixture.Store.FilePath), StringComparison.Ordinal);
+
+        fixture.Store.Set("port", "14002");
+        Assert.Contains("\"autoUpdateLevel\": \"major\"", File.ReadAllText(fixture.Store.FilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AutoUpdateLevelDefaultsCanonicalizesPersistsReloadsAndClears()
+    {
+        using var fixture = new ConfigurationFixture();
+        var store = fixture.Store;
+
+        Assert.Equal("major", store.Read().AutoUpdateLevel);
+        store.Set("autoUpdateLevel", "MiNoR");
+
+        var saved = File.ReadAllText(store.FilePath);
+        Assert.Contains("\"autoUpdateLevel\": \"minor\"", saved, StringComparison.Ordinal);
+        Assert.Equal("minor", new RelayConfigurationStore(store.FilePath).Read().AutoUpdateLevel);
+
+        store.Set("port", "14002");
+        Assert.Contains("\"autoUpdateLevel\": \"minor\"", File.ReadAllText(store.FilePath), StringComparison.Ordinal);
+
+        Assert.Equal("major", store.Clear("autoUpdateLevel").AutoUpdateLevel);
+        Assert.DoesNotContain("autoUpdateLevel", File.ReadAllText(store.FilePath), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -152,6 +178,8 @@ public sealed class RelayConfigurationStoreTests
     [InlineData("autoUpdateIntervalSeconds", "59")]
     [InlineData("autoUpdateIntervalSeconds", "2592001")]
     [InlineData("autoUpdateIntervalSeconds", "nope")]
+    [InlineData("autoUpdateLevel", "none")]
+    [InlineData("autoUpdateLevel", "")]
     public void InvalidAutoUpdateValuesAreRejected(string key, string value)
     {
         using var fixture = new ConfigurationFixture();
@@ -165,6 +193,7 @@ public sealed class RelayConfigurationStoreTests
     [Theory]
     [InlineData("autoUpdate")]
     [InlineData("autoUpdateIntervalSeconds")]
+    [InlineData("autoUpdateLevel")]
     public void NullAutoUpdateJsonValuesAreRejected(string key)
     {
         using var fixture = new ConfigurationFixture();
@@ -204,6 +233,7 @@ public sealed class RelayConfigurationStoreTests
 
         fixture.Store.Set("port", "14001");
         Assert.True(fixture.Store.Read().AutoUpdate);
+        Assert.Contains("\"autoUpdateLevel\": \"major\"", File.ReadAllText(fixture.Store.FilePath), StringComparison.Ordinal);
 
         output.GetStringBuilder().Clear();
         var clearOptions = configOptions with
@@ -217,6 +247,36 @@ public sealed class RelayConfigurationStoreTests
         }
         Assert.True(fixture.Store.Read().AutoUpdate);
         Assert.Equal(14_001, fixture.Store.Read().Port);
+
+        output.GetStringBuilder().Clear();
+        var setLevelOptions = configOptions with
+        {
+            Config = new ConfigCommandOptions(ConfigAction.Set, "auto-update-level", "PATCH"),
+        };
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(setLevelOptions, output, error));
+        using (var setLevelJson = JsonDocument.Parse(output.ToString()))
+        {
+            Assert.Equal("patch", setLevelJson.RootElement.GetProperty("effective").GetProperty("autoUpdateLevel").GetString());
+        }
+
+        output.GetStringBuilder().Clear();
+        var getLevelOptions = setLevelOptions with
+        {
+            Config = new ConfigCommandOptions(ConfigAction.Get, "autoUpdateLevel", null),
+        };
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(getLevelOptions, output, error));
+        using (var getLevelJson = JsonDocument.Parse(output.ToString()))
+        {
+            Assert.Equal("patch", getLevelJson.RootElement.GetProperty("value").GetString());
+        }
+
+        output.GetStringBuilder().Clear();
+        var clearLevelOptions = setLevelOptions with
+        {
+            Config = new ConfigCommandOptions(ConfigAction.Clear, "autoUpdateLevel", null),
+        };
+        Assert.Equal(CliExitCodes.Success, await ConfigurationCommand.ExecuteAsync(clearLevelOptions, output, error));
+        Assert.Equal("major", fixture.Store.Read().AutoUpdateLevel);
     }
 
     [Fact]

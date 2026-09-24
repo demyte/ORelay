@@ -11,6 +11,56 @@ namespace ORelay.Tests.Updating;
 
 public sealed class UpdateEngineTests
 {
+    [Theory]
+    [InlineData("patch", "1.0.0", false)]
+    [InlineData("patch", "1.1.0-dev.1", true)]
+    [InlineData("minor", "1.0.0", true)]
+    [InlineData("minor", "0.9.0", false)]
+    [InlineData("major", "0.9.0", true)]
+    public async Task Update_EnforcesLevelBeforeDownloadOrServiceChanges(string level, string installed, bool allowed)
+    {
+        using var fixture = new Fixture();
+        fixture.Runtime.CurrentVersion = installed;
+        fixture.Runtime.InstalledVersion = installed;
+
+        // Manual discovery still reports the latest stable release. Automatic
+        // installation applies its limit before downloading that release.
+        var check = await fixture.Engine.CheckAsync(new UpdateRequest());
+        Assert.True(check.UpdateAvailable);
+        var result = await fixture.Engine.UpdateAsync(new UpdateRequest(AutoUpdateLevel: level));
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(allowed, result.Changed);
+        Assert.Equal(allowed ? "new executable" : "old executable", File.ReadAllText(fixture.Target));
+        if (!allowed)
+        {
+            Assert.True(result.UpdateAvailable);
+            Assert.Equal(0, fixture.Download.AssetRequests);
+            Assert.Empty(fixture.Service.Operations);
+            Assert.Contains("outside the configured autoUpdateLevel", result.Message);
+        }
+    }
+
+    [Fact]
+    public async Task Update_RejectsNewMajorPublishedAfterAllowedMinorCheck()
+    {
+        using var fixture = new Fixture();
+        var request = new UpdateRequest(AutoUpdateLevel: "minor");
+        var check = await fixture.Engine.CheckAsync(request);
+        Assert.True(check.UpdateAvailable);
+        Assert.Equal("1.1.0", check.LatestVersion);
+        fixture.Download.ReleaseVersion = "2.0.0";
+
+        var result = await fixture.Engine.UpdateAsync(request);
+
+        Assert.True(result.Succeeded);
+        Assert.False(result.Changed);
+        Assert.Equal("2.0.0", result.LatestVersion);
+        Assert.Equal(0, fixture.Download.AssetRequests);
+        Assert.Empty(fixture.Service.Operations);
+        Assert.Equal("old executable", File.ReadAllText(fixture.Target));
+    }
+
     [Fact]
     public async Task Check_ReportsAvailabilityWithoutChangingExecutable()
     {
@@ -601,7 +651,8 @@ public sealed class UpdateEngineTests
     private sealed class FakeDownload : HttpMessageHandler
     {
         private byte[] _archive;
-        private readonly string _archiveName;
+        private string ArchiveName => $"orelay-{ReleaseVersion}-{(OperatingSystem.IsWindows() ? "win-x64.zip" : "linux-x64.tar.gz")}";
+        public string ReleaseVersion { get; set; } = "1.1.0";
         public bool CorruptChecksum { get; set; }
         public bool RedirectChecksum { get; set; }
         public bool SawAuthorizationOnApi { get; private set; }
@@ -610,8 +661,6 @@ public sealed class UpdateEngineTests
 
         public FakeDownload()
         {
-            var rid = OperatingSystem.IsWindows() ? "win-x64" : "linux-x64";
-            _archiveName = $"orelay-1.1.0-{rid}" + (OperatingSystem.IsWindows() ? ".zip" : ".tar.gz");
             _archive = BuildArchive(OperatingSystem.IsWindows() ? "orelay.exe" : "./orelay");
         }
 
@@ -658,9 +707,9 @@ public sealed class UpdateEngineTests
             if (path.EndsWith("/latest", StringComparison.Ordinal))
             {
                 body = Encoding.UTF8.GetBytes($$"""
-                    {"tag_name":"v1.1.0","draft":false,"prerelease":false,"assets":[
-                    {"name":"{{_archiveName}}","id":1,"size":{{_archive.Length}}},
-                    {"name":"{{_archiveName}}.sha256","id":2,"size":100}]}
+                    {"tag_name":"v{{ReleaseVersion}}","draft":false,"prerelease":false,"assets":[
+                    {"name":"{{ArchiveName}}","id":1,"size":{{_archive.Length}}},
+                    {"name":"{{ArchiveName}}.sha256","id":2,"size":100}]}
                     """);
             }
             else
@@ -670,7 +719,7 @@ public sealed class UpdateEngineTests
                 else
                 {
                     var hash = Convert.ToHexString(SHA256.HashData(_archive));
-                    body = Encoding.ASCII.GetBytes($"{(CorruptChecksum ? new string('0', 64) : hash)}  {_archiveName}\n");
+                    body = Encoding.ASCII.GetBytes($"{(CorruptChecksum ? new string('0', 64) : hash)}  {ArchiveName}\n");
                 }
             }
 

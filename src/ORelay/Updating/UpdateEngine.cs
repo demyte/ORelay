@@ -73,6 +73,11 @@ public sealed partial class UpdateEngine
                 throw new UpdateException(UpdateErrorCode.Downgrade, "The installed executable is newer. No downgrade was made.");
             if (latest.CompareTo(installedVersion) == 0)
                 return new UpdateResult(true, false, current, latestVersion, target, "ORelay is already installed at this version.");
+            // Recheck the actual release fetched for installation. The stable feed
+            // may have changed since the automatic worker checked it.
+            if (!AutoUpdatePolicy.Allows(installedStamp, latestVersion, request.AutoUpdateLevel))
+                return new UpdateResult(true, false, current, latestVersion, target,
+                    AutoUpdatePolicy.SkipMessage(request.AutoUpdateLevel), UpdateAvailable: true);
             var service = CheckService(target!, request.ConfigurationPath, request.ServiceName, request.RestartService);
             DownloadStarting(_logger, latestVersion);
             var archive = await _releases.Value.DownloadVerifiedArchiveAsync(release, cancellationToken);

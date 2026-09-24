@@ -12,6 +12,7 @@ public enum RelaySettingKey
     MaxRegistrations,
     AutoUpdate,
     AutoUpdateIntervalSeconds,
+    AutoUpdateLevel,
 }
 
 /// <summary>The built-in values used when a saved setting is absent.</summary>
@@ -25,6 +26,7 @@ public static class RelayConfigurationDefaults
     public const int MaxRegistrations = 1_000;
     public const bool AutoUpdate = true;
     public const int AutoUpdateIntervalSeconds = 10_800;
+    public const string AutoUpdateLevel = "major";
 
     public static RelaySettings Settings { get; } = new(
         Port,
@@ -35,7 +37,8 @@ public static class RelayConfigurationDefaults
         LeaseSeconds,
         MaxRegistrations,
         AutoUpdate,
-        AutoUpdateIntervalSeconds);
+        AutoUpdateIntervalSeconds,
+        AutoUpdateLevel);
 }
 
 /// <summary>Effective settings after applying defaults, a saved file, and invocation overrides.</summary>
@@ -48,7 +51,8 @@ public sealed record RelaySettings(
     int LeaseSeconds,
     int MaxRegistrations,
     bool AutoUpdate = RelayConfigurationDefaults.AutoUpdate,
-    int AutoUpdateIntervalSeconds = RelayConfigurationDefaults.AutoUpdateIntervalSeconds)
+    int AutoUpdateIntervalSeconds = RelayConfigurationDefaults.AutoUpdateIntervalSeconds,
+    string AutoUpdateLevel = RelayConfigurationDefaults.AutoUpdateLevel)
 {
     public RelaySettings()
         : this(
@@ -60,7 +64,8 @@ public sealed record RelaySettings(
             RelayConfigurationDefaults.LeaseSeconds,
             RelayConfigurationDefaults.MaxRegistrations,
             RelayConfigurationDefaults.AutoUpdate,
-            RelayConfigurationDefaults.AutoUpdateIntervalSeconds)
+            RelayConfigurationDefaults.AutoUpdateIntervalSeconds,
+            RelayConfigurationDefaults.AutoUpdateLevel)
     {
     }
 }
@@ -78,7 +83,8 @@ public sealed record RelaySettingsPatch(
     int? LeaseSeconds = null,
     int? MaxRegistrations = null,
     bool? AutoUpdate = null,
-    int? AutoUpdateIntervalSeconds = null)
+    int? AutoUpdateIntervalSeconds = null,
+    string? AutoUpdateLevel = null)
 {
     public bool IsEmpty =>
         Port is null &&
@@ -89,7 +95,8 @@ public sealed record RelaySettingsPatch(
         LeaseSeconds is null &&
         MaxRegistrations is null &&
         AutoUpdate is null &&
-        AutoUpdateIntervalSeconds is null;
+        AutoUpdateIntervalSeconds is null &&
+        AutoUpdateLevel is null;
 
     public RelaySettings ApplyTo(RelaySettings settings)
     {
@@ -106,6 +113,7 @@ public sealed record RelaySettingsPatch(
             MaxRegistrations = MaxRegistrations ?? settings.MaxRegistrations,
             AutoUpdate = AutoUpdate ?? settings.AutoUpdate,
             AutoUpdateIntervalSeconds = AutoUpdateIntervalSeconds ?? settings.AutoUpdateIntervalSeconds,
+            AutoUpdateLevel = AutoUpdateLevel ?? settings.AutoUpdateLevel,
         };
     }
 

@@ -30,7 +30,7 @@ public sealed class RelayConfigurationStore
     public const int CurrentSchemaVersion = 1;
 
     private static readonly string[] NonNullableSettingNames =
-    ["port", "bind", "autoDiscovery", "leaseSeconds", "maxRegistrations", "autoUpdate", "autoUpdateIntervalSeconds"];
+    ["port", "bind", "autoDiscovery", "leaseSeconds", "maxRegistrations", "autoUpdate", "autoUpdateIntervalSeconds", "autoUpdateLevel"];
 
     private readonly TimeSpan _lockTimeout;
 
@@ -109,6 +109,7 @@ public sealed class RelayConfigurationStore
 
         using var fileLock = AcquireLock();
         var document = ReadDocumentIfPresent() ?? new RelayConfigurationDocument();
+        document.AutoUpdateLevel ??= RelayConfigurationDefaults.AutoUpdateLevel;
         ApplyPatch(document, setting, patch);
         RelaySettingsValidator.ValidateDocument(document, FilePath);
         WriteDocument(document);
@@ -138,6 +139,7 @@ public sealed class RelayConfigurationStore
             return RelayConfigurationDefaults.Settings;
         }
 
+        document.AutoUpdateLevel ??= RelayConfigurationDefaults.AutoUpdateLevel;
         ClearProperty(document, setting);
         RelaySettingsValidator.ValidateDocument(document, FilePath);
         WriteDocument(document);
@@ -314,6 +316,7 @@ public sealed class RelayConfigurationStore
                     FilePath);
             }
 
+            document.AutoUpdateLevel = document.AutoUpdateLevel?.ToLowerInvariant();
             RelaySettingsValidator.ValidateDocument(document, FilePath);
             return document;
         }
@@ -463,6 +466,9 @@ public sealed class RelayConfigurationStore
             case RelaySettingKey.AutoUpdateIntervalSeconds:
                 document.AutoUpdateIntervalSeconds = patch.AutoUpdateIntervalSeconds;
                 break;
+            case RelaySettingKey.AutoUpdateLevel:
+                document.AutoUpdateLevel = patch.AutoUpdateLevel;
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(setting), setting, "Unknown relay setting.");
         }
@@ -483,6 +489,7 @@ public sealed class RelayConfigurationStore
         MaxRegistrations = document.MaxRegistrations,
         AutoUpdate = document.AutoUpdate,
         AutoUpdateIntervalSeconds = document.AutoUpdateIntervalSeconds,
+        AutoUpdateLevel = document.AutoUpdateLevel,
     };
 
     private static void TryDeleteTemporaryFile(string path)
