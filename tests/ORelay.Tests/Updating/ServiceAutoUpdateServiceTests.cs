@@ -317,8 +317,13 @@ public sealed class ServiceAutoUpdateServiceTests
         var timeout = DateTime.UtcNow + TestTimeout;
         while (DateTime.UtcNow < timeout)
         {
-            if (File.Exists(path) && File.ReadAllText(path).Contains(value, StringComparison.Ordinal))
-                return;
+            if (File.Exists(path))
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                if ((await reader.ReadToEndAsync()).Contains(value, StringComparison.Ordinal))
+                    return;
+            }
             await Task.Delay(10);
         }
 

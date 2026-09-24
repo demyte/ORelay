@@ -110,6 +110,8 @@ Redirecting stderr produces plain text without colour codes. Set `NO_COLOR=1` or
 
 The server and automatic updater also write plain-text UTF-8 logs under `logs` beside the selected configuration file. `orelay.log` is the current file, `orelay.1.log` is the previous file, and `orelay.2.log` is the oldest. There are at most three log files, each capped at 2 MiB, or 2,097,152 bytes. Before a write would exceed that size, ORelay removes the oldest file and rotates the others. Logs append across restarts. Configurations in the same directory share these files and their retention limit.
 
+The directory also contains an empty `orelay.lock` file that coordinates writers across processes. Leave it in place while ORelay is running.
+
 File records have a UTC timestamp, process ID, level, application category, and event ID. Startup records identify the version and service or foreground mode. Update schedules show the service, interval, and next check time. Update attempts log release checks, downloads, checksum verification, replacement, restart, recovery, and a final status with the service, versions, elapsed time, and a safe reason code. Callback records confirm that ORelay issued a redirect; they do not confirm delivery to the worktree.
 
 Framework logs, exception details, scopes, callback query values, and destination paths are excluded from file output. If file logging is unavailable, ORelay emits a fixed warning to stderr and keeps running; later writes retry. The service account must be able to create and write the `logs` directory.

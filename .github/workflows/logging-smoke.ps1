@@ -198,37 +198,58 @@ foreach ($mode in @('default', 'json')) {
             throw 'Log rotation did not keep the newest generations.'
         }
 
-        # The detached updater and server must append to the same log safely.
-        $workerConfig = Join-Path $workRoot 'worker.json'
-        '{"schemaVersion":1,"autoUpdate":false}' | Set-Content -LiteralPath $workerConfig
-        $workerStart = [Diagnostics.ProcessStartInfo]::new($executable)
-        $workerStart.UseShellExecute = $false
-        $workerStart.CreateNoWindow = $true
-        foreach ($argument in @('__auto-update', $workerConfig, 'orelay-logging-smoke')) { $workerStart.ArgumentList.Add($argument) }
-        $worker = [Diagnostics.Process]::Start($workerStart)
-        $workerId = $worker.Id
+        # Separate workers and concurrent HTTP handlers must share the log safely.
+        $workers = [Collections.Generic.List[Diagnostics.Process]]::new()
+        $workerIds = [Collections.Generic.List[int]]::new()
+        $requests = [Collections.Generic.List[Threading.Tasks.Task[Net.Http.HttpResponseMessage]]]::new()
+        $concurrentClient = [Net.Http.HttpClient]::new()
+        $concurrentClient.Timeout = [TimeSpan]::FromSeconds(15)
         try {
-            for ($i = 0; $i -lt 20; $i++) {
-                $rejected = $client.GetAsync("http://127.0.0.1:$port/callback?state=invalid").GetAwaiter().GetResult()
+            for ($i = 0; $i -lt 100; $i++) {
+                $requests.Add($concurrentClient.GetAsync("http://127.0.0.1:$port/callback?state=invalid"))
+            }
+            for ($i = 0; $i -lt 10; $i++) {
+                $workerConfig = Join-Path $workRoot "worker-$i.json"
+                '{"schemaVersion":1,"autoUpdate":false}' | Set-Content -LiteralPath $workerConfig
+                $workerStart = [Diagnostics.ProcessStartInfo]::new($executable)
+                $workerStart.UseShellExecute = $false
+                $workerStart.CreateNoWindow = $true
+                foreach ($argument in @('__auto-update', $workerConfig, 'orelay-logging-smoke')) { $workerStart.ArgumentList.Add($argument) }
+                $worker = [Diagnostics.Process]::Start($workerStart)
+                $workers.Add($worker)
+                $workerIds.Add($worker.Id)
+            }
+            foreach ($request in $requests) {
+                $rejected = $request.GetAwaiter().GetResult()
                 if ([int]$rejected.StatusCode -ne 400) { throw 'Concurrent logging request failed.' }
                 $rejected.Dispose()
             }
-            if (-not $worker.WaitForExit(10000) -or $worker.ExitCode -ne 0) { throw 'Owned disabled worker did not finish successfully.' }
-        } finally { Stop-OwnedProcess $worker }
+            foreach ($worker in $workers) {
+                if (-not $worker.WaitForExit(10000) -or $worker.ExitCode -ne 0) { throw 'Owned disabled worker did not finish successfully.' }
+            }
+        } finally {
+            $concurrentClient.Dispose()
+            foreach ($worker in $workers) { Stop-OwnedProcess $worker }
+        }
         Wait-Log $fileLog 'Automatic update completed: disabled'
         $currentLines = @(Get-Lines $fileLog)
-        if (@($currentLines | Where-Object { $_ -like '*Request rejected:*' }).Count -ne 21 -or
-            @($currentLines | Where-Object { $_ -like '*Automatic update check started*' }).Count -ne 1) {
+        if ($currentLines.Count -ne 121 -or
+            @($currentLines | Where-Object { $_ -like '*Request rejected:*' }).Count -ne 101 -or
+            @($currentLines | Where-Object { $_ -like '*Automatic update check started*' }).Count -ne 10) {
             throw 'Concurrent server and worker logging lost records.'
         }
         if (@($currentLines | Where-Object { $_ -notmatch '^\d{4}-\d{2}-\d{2}T.*\[(Information|Warning)\] ORelay' }).Count) {
             throw 'Concurrent file logging produced an incomplete record.'
         }
         $serverRecord = "[pid $($process.Id)] [Warning] ORelay[5]: Request rejected:"
-        $workerRecord = "[pid $workerId] [Information] ORelay.Updating.ServiceAutoUpdateWorker[4]: Automatic update completed: disabled; reason=disabled-in-configuration, service=orelay-logging-smoke,"
-        if (@($currentLines | Where-Object { $_.Contains($serverRecord) }).Count -ne 21 -or
-            @($currentLines | Where-Object { $_.Contains($workerRecord) }).Count -ne 1) {
-            throw 'File records did not identify the correct server and worker processes or outcome.'
+        if (@($currentLines | Where-Object { $_.Contains($serverRecord) }).Count -ne 101) {
+            throw 'File records did not identify the correct server process.'
+        }
+        foreach ($workerId in $workerIds) {
+            $workerRecord = "[pid $workerId] [Information] ORelay.Updating.ServiceAutoUpdateWorker[4]: Automatic update completed: disabled; reason=disabled-in-configuration, service=orelay-logging-smoke,"
+            if (@($currentLines | Where-Object { $_.Contains($workerRecord) }).Count -ne 1) {
+                throw 'File records did not identify the correct worker process or outcome.'
+            }
         }
         [pscustomobject]@{ Mode = $mode; Rid = $Rid; Status = 'passed'; StderrLines = $lines.Count; FileCount = $logFiles.Count; MaximumFileBytes = 2 * 1024 * 1024; ConcurrentRecords = $currentLines.Count } |
             ConvertTo-Json | Set-Content -LiteralPath $resultPath

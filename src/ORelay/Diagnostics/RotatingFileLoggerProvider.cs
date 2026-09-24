@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 
@@ -8,21 +8,17 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
 {
     private const int MaxFileBytes = 2 * 1024 * 1024;
     private const int MaxMessageCharacters = 8 * 1024;
-    private static readonly TimeSpan MutexWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan LockWait = TimeSpan.FromSeconds(5);
     private static int _warningWritten;
 
     private readonly string _directory;
-    private readonly string _mutexName;
+    private readonly string _lockPath;
 
     internal RotatingFileLoggerProvider(string configurationPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
         _directory = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(configurationPath))!, "logs");
-        var normalized = Path.GetFullPath(_directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (OperatingSystem.IsWindows())
-            normalized = normalized.ToUpperInvariant();
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
-        _mutexName = $"ORelay.FileLog.{Convert.ToHexString(hash)}";
+        _lockPath = Path.Combine(_directory, "orelay.lock");
     }
 
     public ILogger CreateLogger(string categoryName) =>
@@ -42,37 +38,17 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
             // Messages are limited before encoding so a single record always fits in one file.
             var record = $"{DateTimeOffset.UtcNow:O} [pid {Environment.ProcessId}] [{level}] {safeCategory}[{eventId.Id}]: {safeMessage}\n";
             var bytes = Encoding.UTF8.GetBytes(record);
-            using var mutex = new Mutex(false, _mutexName);
-            var acquired = false;
-            try
-            {
-                try
-                {
-                    acquired = mutex.WaitOne(MutexWait);
-                }
-                catch (AbandonedMutexException)
-                {
-                    acquired = true;
-                }
+            Directory.CreateDirectory(_directory);
+            // Keep this file in place so every process locks the same file, including after a restart.
+            using var fileLock = AcquireLock();
+            var current = Path.Combine(_directory, "orelay.log");
+            var currentSize = File.Exists(current) ? new FileInfo(current).Length : 0;
+            if (currentSize + bytes.Length > MaxFileBytes)
+                Rotate(current);
 
-                if (!acquired)
-                    throw new TimeoutException();
-
-                Directory.CreateDirectory(_directory);
-                var current = Path.Combine(_directory, "orelay.log");
-                var currentSize = File.Exists(current) ? new FileInfo(current).Length : 0;
-                if (currentSize + bytes.Length > MaxFileBytes)
-                    Rotate(current);
-
-                using var stream = new FileStream(current, FileMode.Append, FileAccess.Write, FileShare.Read);
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
-            }
-            finally
-            {
-                if (acquired)
-                    mutex.ReleaseMutex();
-            }
+            using var stream = new FileStream(current, FileMode.Append, FileAccess.Write, FileShare.Read);
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
         }
         catch (Exception)
         {
@@ -81,6 +57,22 @@ internal sealed class RotatingFileLoggerProvider : ILoggerProvider
             {
                 try { Console.Error.WriteLine("ORelay could not write its log file."); }
                 catch (Exception) { }
+            }
+        }
+    }
+
+    private FileStream AcquireLock()
+    {
+        var wait = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                return new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (wait.Elapsed < LockWait)
+            {
+                Thread.Sleep(25);
             }
         }
     }

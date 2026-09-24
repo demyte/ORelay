@@ -85,6 +85,32 @@ public sealed class RotatingFileLoggerProviderTests
     }
 
     [Fact]
+    public async Task ExistingFileLockBlocksWritingUntilReleased()
+    {
+        using var fixture = new LogFixture();
+        Directory.CreateDirectory(fixture.LogDirectory);
+        using var fileLock = new FileStream(Path.Combine(fixture.LogDirectory, "orelay.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var provider = new RotatingFileLoggerProvider(fixture.ConfigurationPath);
+        var logger = provider.CreateLogger("ORelay.Concurrent");
+        using var started = new ManualResetEventSlim();
+
+        var write = Task.Run(() =>
+        {
+            started.Set();
+            Emit(logger, "after-lock");
+        });
+
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        Assert.NotSame(write, await Task.WhenAny(write, Task.Delay(200)));
+        Assert.False(File.Exists(fixture.Current));
+
+        fileLock.Dispose();
+        await write;
+        Assert.Contains("after-lock", File.ReadAllText(fixture.Current));
+    }
+
+    [Fact]
     public void FrameworkCategoriesAndExceptionDetailsAreExcluded()
     {
         using var fixture = new LogFixture();
